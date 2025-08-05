@@ -1,0 +1,94 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - zeebra-dev
+      - main
+  pull_request:
+    branches:
+      - zeebra-dev
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          
+      - name: Run tests
+        run: |
+          # Add your test commands here
+          pytest
+
+  deploy-dev:
+    # needs: test
+    if: github.ref == 'refs/heads/zeebra-dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Make deploy script executable
+        run: chmod +x deploy.sh
+      
+      - name: Deploy to development
+        run: |
+          # Run the deployment script
+          ./deploy.sh dev
+        env:
+          # Add any environment variables needed for development
+          DOCKER_COMPOSE_FILE: docker-compose-dev.yml
+
+  deploy-prod:
+    # needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Make deploy script executable
+        run: chmod +x deploy.sh
+      
+      - name: Deploy to production
+        run: |
+          # Run the deployment script
+          ./deploy.sh prod
+        env:
+          # Add any environment variables needed for production
+          DOCKER_COMPOSE_FILE: docker-compose.yml
+
+  notify:
+    needs: [deploy-dev, deploy-prod]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify deployment status
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_CHANNEL: deployments
+          SLACK_COLOR: ${{ job.status }}
+          SLACK_TITLE: Deployment Status
+          SLACK_MESSAGE: |
+            Environment: ${{ github.ref == 'refs/heads/main' && 'Production' || 'Development' }}
+            Status: ${{ job.status }}
+            Branch: ${{ github.ref }}
+            Commit: ${{ github.sha }}
+            Author: ${{ github.actor }}

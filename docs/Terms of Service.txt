@@ -1,0 +1,94 @@
+# TERMS OF SERVICE
+
+**Last Updated: May 2, 2025**
+
+## 1. ACCEPTANCE OF TERMS
+
+By accessing or using BeeBlue ("Service," "we," "our," or "us"), an Instagram shopping assistant bot, you agree to be bound by these Terms of Service. If you do not agree to these Terms, you may not access or use the Service.
+
+## 2. DESCRIPTION OF SERVICE
+
+Our Service is an Instagram bot designed to assist users with shopping processes by providing product recommendations, price comparisons, and shopping information based on user queries and preferences.
+
+## 3. ELIGIBILITY
+
+You must be at least 13 years old to use our Service. By using the Service, you represent and warrant that you are at least 13 years old and that your use of the Service does not violate any applicable law or regulation.
+
+## 4. USER ACCOUNTS
+
+### 4.1 Instagram Account
+Our Service interacts with your Instagram account. You are responsible for maintaining the confidentiality of your Instagram credentials and for all activities that occur under your account.
+
+### 4.2 Accurate Information
+You agree to provide accurate, current, and complete information as required for using our Service.
+
+## 5. USER CONDUCT
+
+You agree not to:
+
+- Use the Service for any illegal purpose or in violation of any local, state, national, or international law.
+- Harass, abuse, or harm another person through use of our Service.
+- Impersonate another user or person.
+- Use the Service to send automated, unsolicited, or unauthorized messages.
+- Interfere with or disrupt the Service or servers or networks connected to the Service.
+- Attempt to override or circumvent any security mechanisms of the Service.
+- Use any robot, spider, crawler, scraper, or other automated means to access the Service.
+- Use the Service in any manner that could disable, overburden, damage, or impair the site.
+
+## 6. INTELLECTUAL PROPERTY
+
+### 6.1 Our Intellectual Property
+The Service and its original content, features, and functionality are and will remain the exclusive property of BeeBlue and its licensors. The Service is protected by copyright, trademark, and other laws.
+
+### 6.2 User Content
+By submitting search queries, feedback, or other content to our Service, you grant us a worldwide, non-exclusive, royalty-free license to use, reproduce, modify, adapt, publish, translate, and distribute such content in connection with providing and improving our Service.
+
+## 7. THIRD-PARTY LINKS AND SERVICES
+
+Our Service may contain links to third-party websites or services that are not owned or controlled by us. We have no control over and assume no responsibility for the content, privacy policies, or practices of any third-party websites or services.
+
+## 8. LIMITATION OF LIABILITY
+
+To the maximum extent permitted by applicable law, we shall not be liable for any indirect, incidental, special, consequential, or punitive damages, including loss of profits, data, or other intangible losses, resulting from:
+
+- Your use or inability to use the Service.
+- Any unauthorized access to or use of our servers and/or any personal information stored therein.
+- Any interruption or cessation of transmission to or from the Service.
+- Any bugs, viruses, trojan horses, or the like that may be transmitted to or through our Service.
+- Any errors or omissions in any content or for any loss or damage incurred as a result of the use of any content posted, emailed, transmitted, or otherwise made available through the Service.
+
+## 9. DISCLAIMER OF WARRANTIES
+
+The Service is provided on an "AS IS" and "AS AVAILABLE" basis without any representation or warranty, whether express, implied, or statutory. We specifically disclaim any implied warranties of title, merchantability, fitness for a particular purpose, and non-infringement.
+
+## 10. INDEMNIFICATION
+
+You agree to defend, indemnify, and hold harmless BeeBlue and its officers, directors, employees, and agents from and against any and all claims, damages, obligations, losses, liabilities, costs or debt, and expenses arising from your use of the Service.
+
+## 11. CHANGES TO TERMS
+
+We reserve the right to modify or replace these Terms at any time. We will provide notice of any changes by posting the new Terms on this page and updating the "Last Updated" date. Your continued use of the Service after any such changes constitutes your acceptance of the new Terms.
+
+## 12. TERMINATION
+
+We may terminate or suspend your access to our Service immediately, without prior notice or liability, for any reason whatsoever, including, without limitation, if you breach the Terms.
+
+## 13. GOVERNING LAW
+
+These Terms shall be governed by the laws of Quebec, without regard to its conflict of law provisions.
+
+## 14. DISPUTE RESOLUTION
+
+Any dispute arising out of or relating to these Terms or the Service shall be resolved through binding arbitration in accordance with the The ADR Institute of Canada (ADRIC) rules, to be conducted in Montreal, Quebec, Canada.
+
+## 15. ENTIRE AGREEMENT
+
+These Terms constitute the entire agreement between you and BeeBlue regarding our Service and supersede all prior and contemporaneous agreements, representations, and understandings.
+
+## 16. CONTACT US
+
+If you have any questions about these Terms, please contact us at:
+
+BeeBlue
+Email: admin@beeblue.shop
+Address: 140 Woodland ave, Beaconsfield, Quebec, H9W 4W1

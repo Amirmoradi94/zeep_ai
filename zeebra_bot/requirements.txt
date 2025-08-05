@@ -1,0 +1,36 @@
+Flask>=2.0.1
+Flask-Cors>=3.0.10
+schedule>=1.1.0
+apscheduler>=3.7.0
+imageio>=2.31.1
+openai>=1.57.4
+psycopg2-binary>=2.9.3
+python-dotenv>=0.19.0
+beautifulsoup4>=4.11.1
+requests>=2.28.1
+urllib3>=1.26.15
+moviepy==1.0.3
+opencv-python-headless>=4.7.0.72
+numpy>=1.24.3
+gunicorn>=20.1.0
+google-generativeai>=0.1.0
+google-genai
+asyncpg>=0.27.0
+fastapi
+uvicorn
+aiohttp>=3.8.5
+aiofiles>=0.8.0
+redis
+tenacity
+backoff
+sentry-sdk[fastapi]
+
+# Database
+psycopg2-binary>=2.9.5
+
+# System monitoring
+psutil>=5.9.0
+docker
+
+
+

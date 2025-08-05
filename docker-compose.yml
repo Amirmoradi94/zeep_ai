@@ -1,0 +1,118 @@
+services:
+  bb_nginx_prod:
+    container_name: bb_nginx_prod
+    restart: always
+    build:
+      context: .
+      dockerfile: ./docker/nginx/Dockerfile
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./docker/nginx/config/prod/conf.d:/etc/nginx/conf.d:ro
+      - ./docker/nginx/logs:/var/log/nginx # nginx logs
+      - ./docker/nginx/ssl:/etc/letsencrypt:or
+      # - certificates:/etc/letsencrypt/live
+    expose:
+      - 44302
+    networks:
+      - internal-zeebra
+      - nginx-proxy
+
+  bb_db_prod:
+    container_name: bb_db_prod
+    restart: always
+    image: postgres:15
+    shm_size: 128mb
+    env_file:
+      - docker/db/.prod.env
+    volumes:
+      - bb_db_data_prod:/var/lib/postgresql/data
+      - ./docker/db/pg_hba.conf:/var/lib/postgresql/data/pg_hba.conf
+    expose:
+      - 5432
+    networks:
+      - internal-zeebra
+
+  bb_website_prod:
+    container_name: bb_website_prod
+    restart: always
+    build:
+      context: .
+      dockerfile: ./docker/website/Dockerfile
+    env_file:
+      - docker/website/.prod.env
+    expose:
+      - 8080
+    networks:
+      - internal-zeebra
+
+  bb_adminer_prod:
+    image: adminer
+    restart: always
+    expose:
+      - 8080
+    networks:
+      - internal-zeebra
+
+  bb_bot_prod:
+    container_name: bb_bot_prod
+    restart: always
+    build:
+      context: .
+      dockerfile: ./docker/zeebra_bot/Dockerfile
+    # healthcheck:
+    #   test: [ "CMD", "curl", "-f", "http://localhost:5000/health" ]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 40s
+    env_file:
+      - docker/zeebra_bot/.prod.env
+    volumes:
+      - ./reels:/app/reels
+      - ./logs:/app/logs
+      - ./saved_images:/app/saved_images
+    expose:
+      - 5000
+    depends_on:
+      - bb_db_prod
+    networks:
+      - internal-zeebra
+
+  bb_dashboard:
+    container_name: bb_dashboard
+    restart: always
+    build:
+      context: .
+      dockerfile: ./docker/dashboard_frontend/Dockerfile
+    env_file:
+      - docker/dashboard_frontend/.prod.env
+    expose:
+      - 8080
+    # depends_on:
+      # - bb_dashboard_backend
+    networks:
+      - internal-zeebra
+
+  bb_dashboard_backend:
+    container_name: bb_dashboard_backend
+    restart: always
+    build:
+      context: .
+      dockerfile: ./docker/dashboard_backend/Dockerfile
+    env_file:
+      - docker/dashboard_backend/.prod.env
+    expose:
+      - 8000
+    depends_on:
+      - bb_db_prod
+    networks:
+      - internal-zeebra
+
+volumes:
+  bb_db_data_prod:
+
+networks:
+  internal-zeebra:
+    driver: bridge
+  nginx-proxy:
+    external: true

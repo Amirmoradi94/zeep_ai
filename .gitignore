@@ -1,0 +1,76 @@
+# Environment variables and config
+.env
+.env.*
+.prod.env
+.dev.env
+.local.env
+.env.local
+.env.development
+.env.production
+.env.test
+.env.staging
+*.config
+config.js
+config.json
+secrets.yml
+.npmrc
+.yarnrc
+.dev.env
+.prod.env
+.htpasswd
+
+# API keys and credentials
+*_key
+*_keys
+*_secret
+*_token
+*.pem
+*.key
+*.cert
+*.crt
+*.pyc
+saved_images/
+
+# Database files
+*.sql
+*.sqlite
+*.db
+
+# Log files
+*.log
+log/
+logs/
+
+# User uploads and generated content
+uploads/
+media/
+
+# Dependencies
+/node_modules
+/bower_components
+/vendor
+
+# Build directories
+/build
+/dist
+/.next
+/out
+
+# Cache
+.cache/
+.npm
+.yarn/cache
+.eslintcache
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Editor directories and files
+.idea/
+.vscode/
+*.sublime-*
+*.swp
+*~
+
+reels
