@@ -4,6 +4,7 @@ import openai
 import os
 import requests
 from dotenv import load_dotenv
+from perplexity import Perplexity
 
 load_dotenv()
 
@@ -81,102 +82,7 @@ def generate_voice_from_text(text_input, output_filename="speech.mp3", voice="al
         return None
 
 
-def deep_product_research(search_query):
-    """
-    Conduct deep product research using Perplexity AI and generate audio review.
-    
-    Args:
-        search_query (str): Product search query including name, brand, features, and user aspects
-    
-    Returns:
-        str: Research text
-    """
-    try:
-        # Perplexity AI API configuration
-        url = "https://api.perplexity.ai/chat/completions"
-        
-        # Friendly and conversational system prompt for product review
-        system_prompt = """You are a friendly and knowledgeable product advisor who helps people make informed buying decisions. Your task is to provide helpful, conversational advice about products in Farsi language.
 
-                        WRITING STYLE:
-                        - Use friendly, conversational tone like talking to a friend
-                        - Start sentences with phrases like "به نظر میرسه که", "یکی از بهترین هاست", "می‌تونم بگم که"
-                        - Use casual, approachable language while staying informative
-                        - Write as if you're giving personal advice to someone you care about
-
-                        CONTENT STRUCTURE:
-                        - Begin with a friendly introduction about the product
-                        - Share what you think about it in a conversational way
-                        - Mention the good things (pros) in a positive, encouraging tone
-                        - Honestly mention any concerns (cons) in a helpful way
-                        - Give a friendly recommendation or suggestion
-
-                        LANGUAGE REQUIREMENTS:
-                        - Write entirely in Farsi/Persian
-                        - Use everyday, conversational Farsi
-                        - Avoid overly technical jargon unless necessary
-                        - Make it sound natural and friendly
-
-                        TONE EXAMPLES:
-                        - "به نظر میرسه که این محصول واقعاً خوبه"
-                        - "یکی از بهترین انتخاب‌هاست توی این رنج قیمت"
-                        - "می‌تونم بگم که ارزش خرید داره"
-                        - "البته یه کم مشکل هم داره ولی در کل خوبه"
-
-                        OUTPUT REQUIREMENTS:
-                        - WRITE **150-200 words** in friendly, conversational Farsi
-                        - Focus on helping the user make a decision
-                        - Be honest but encouraging
-                        - Structure for 30-second audio narration
-                        - Make it sound like friendly advice from a knowledgeable friend
-
-                        Remember: You're not a formal reviewer, you're a helpful friend giving advice about a product!"""
-
-        payload = {
-            "model": "sonar",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": system_prompt
-                },
-                {
-                    "role": "user",
-                    "content": f"Please provide a comprehensive technical review for: {search_query}"
-                }
-            ],
-            "max_tokens": 300
-        }
-
-        perplexity_api_key = os.getenv('PERPELEXITY_API_KEY')
-        if not perplexity_api_key:
-            print("❌ Error: PERPLEXITY_API_KEY environment variable not set")
-            return None
-        
-        headers = {
-            "Authorization": f"Bearer {perplexity_api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        # Make API request to Perplexity
-        response = requests.post(url, json=payload, headers=headers)
-        
-        if response.status_code == 200:
-            result = response.json()
-            research_text = result['choices'][0]['message']['content']
-            
-            print("✅ Product research completed successfully")
-            #print(f"Research text: {research_text}")
-            
-            return research_text
-
-        else:
-            print(f"❌ Perplexity API error: {response.status_code}")
-            print(f"Response: {response.text}")
-            return None
-            
-    except Exception as e:
-        print(f"❌ Error in deep product research: {e}")
-        return None
     
 
 if __name__ == "__main__":
