@@ -8,6 +8,11 @@ from google.genai import types
 from pathlib import Path
 from logging import Logger
 
+from dotenv import load_dotenv
+load_dotenv()
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
 
 #------------------------------------* CONSTANTS *------------------------------------
 VOICES_PATH = "./voices"
@@ -256,4 +261,61 @@ def narration_to_voice(
         
         return False
 
+
+# ================================================================================================
+# EXAMPLE USAGE
+# ================================================================================================
+
+if __name__ == "__main__":
+    """
+    Example demonstrating how to use narration_to_voice function.
+    This example shows:
+    1. Converting a single narration text to voice
+    2. Converting multiple text parts (split narrations) to separate voice files
+    3. Handling file paths and cleanup
+    """
+    
+    
+    # Example 2: Multiple narration parts (split text)
+    print("\n\n" + "=" * 80)
+    print("🎤 Example 2: Multiple Voice Messages (Split Narration)")
+    print("=" * 80)
+    
+    narration_parts = [
+        """به نظر میرسه که سامسونگ گلکسی بادز 2 پرو (Samsung Galaxy Buds 2 Pro) گلکسی بادز ۲ پرو یکی از هدفون‌های بی‌سیم رده‌بالای سامسونگه که الان با قیمت حدود ۵ تا ۶ میلیون تومن توی بازار ایران پیدا می‌شه.. نکته‌های خوبش اینه که کیفیت صدای فوق‌العاده با بیس قوی، نویز کنسلینگ خیلی مؤثر مخصوصاً توی محیط‌های شلوغ، طراحی سبک و آرگونومیک که راحت توی گوش قرار می‌گیره. خیلی خب، توضیحاتم رو توی ویس بعدی ادامه میدم""",
+        
+        """البته عمر باتری هر گوشی نسبتاً کمه و برای بعضیا قیمتش نسبت به امکاناتش بالاست. رقیباش هم مدل هایی مثل Sony WF-1000XM5، Apple AirPods Pro 2 و Nothing Ear (2) هستن. در مقایسه با اون‌ها، نسبت ت به WF-1000XM5 که حدود ۸ تا ۹ میلیون تومنه و ایرپادز پرو ۲ که بالای ۱۰ میلیون تومنه، گلکسی بادز ۲ پرو ارزون‌تره ولی عمر باتریش نسبت به اون‌ها کوتاه‌تره.. اگه دنبال یه هدفون جمع‌وجور با صدای خیلی خوب و حذف نویز قوی هستی و باتری خیلی برات مهم نیست، واقعاً گزینه ارزشمندیه.."""
+    ]
+    
+    print(f"\n📝 Converting {len(narration_parts)} text parts to separate voice files...")
+    
+    # Convert each part to voice
+    all_success = True
+    for i, part in enumerate(narration_parts, 1):
+        print(f"\n--- Processing Part {i} ---")
+        print(f"Text length: {len(part)} characters")
+        print(f"Preview: {part[:80]}...")
+        
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+        
+        success = narration_to_voice(
+            narration_text=part,
+            gemini_client=gemini_client,
+            output_filename=f"galaxy_buds_review_part{i}",
+            user_id=1234567890
+        )
+        
+        if success:
+            print(f"✅ Part {i} voice generated: galaxy_buds_review_part{i}.mp3")
+        else:
+            print(f"❌ Failed to generate Part {i}")
+            all_success = False
+    
+    if all_success:
+        print("\n" + "=" * 80)
+        print("✅ All voice messages generated successfully!")
+        print("=" * 80)
+        print("\n📁 Generated files:")
+        for i in range(1, len(narration_parts) + 1):
+            print(f"   - output_voices/galaxy_buds_review_part{i}.mp3")
 

@@ -1,5 +1,5 @@
 # Environment variables and config
-.env
+
 .env.*
 .prod.env
 .dev.env
