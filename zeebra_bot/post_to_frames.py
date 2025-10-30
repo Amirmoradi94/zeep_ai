@@ -199,7 +199,7 @@ async def post_to_frames(post_url: str, user_id: int, post_type: str = None, log
         os.makedirs(frames_dir, exist_ok=True)
         
         # Process based on post type
-        if post_type == 'image':
+        if post_type in ['image', 'share']:
             logger.info("Processing as image post")
             success = await download_image(post_url, user_id, logger)
             
@@ -207,7 +207,7 @@ async def post_to_frames(post_url: str, user_id: int, post_type: str = None, log
                 return False
             return True
         
-        elif post_type == 'video':
+        elif post_type in ['ig_reel', 'video']:
             success = await download_reel(post_url, reel_path, logger)
             if not success:
                 return False

@@ -194,38 +194,6 @@ async def vision_api_call(endpoint, response_time, user_id=None, success=None, u
             logger
         )
         return False
-    
-#---------------------------------- SCRAPING API CALL LOGGING ----------------------------------
-async def scraping_api_call(endpoint, response_time, user_id=None, success=None, updated_at=None, logger=None):
-    try:
-        async def operation(conn):
-            query = """
-                INSERT INTO scraping_api_logs (endpoint, response_time, user_id, success, updated_at)
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING id
-            """
-            try:
-                log_id = await conn.fetchval(query, endpoint, response_time, user_id, success, updated_at)
-                return log_id is not None
-            except asyncpg.exceptions.QueryCanceledError:
-                logger.error("Query timeout occurred while logging scraping API call")
-                await error_handler(
-                    "Database query timeout while logging scraping API call",
-                    "error",
-                    "medium",
-                    logger
-                )
-                return False
-
-        return await execute_db_operation(operation)
-    except Exception as e:
-        await error_handler(
-            f"Error logging API call: {str(e)}",
-            "error",
-            "medium",
-            logger
-        )
-        return False
 
 #---------------------------------- GET USER INFO ----------------------------------
 async def get_user_info(user_id, fields=None, logger=None):
@@ -267,6 +235,38 @@ async def get_user_info(user_id, fields=None, logger=None):
             fallback_fields = [fallback_fields]
         return {field: None for field in fallback_fields}
 
+#---------------------------------- UPDATE QUERY ----------------------------------
+async def update_query(query_id, user_id, product_brand, logger):
+    try:
+        async def operation(conn):
+            query = """
+                UPDATE queries
+                SET product_brand = $1
+                WHERE query_id = $2
+                RETURNING query_id
+            """
+            try:
+                updated_query_id = await conn.fetchval(query, product_brand, query_id)
+                return updated_query_id is not None
+            except asyncpg.exceptions.QueryCanceledError:
+                logger.error("Query timeout occurred while updating query")
+                await error_handler(
+                    "Database query timeout while updating query",
+                    "error",
+                    "high",
+                    logger
+                )
+                return False
+
+        return await execute_db_operation(operation)
+    except Exception as e:
+        await error_handler(
+            f"Error updating query with product brand {product_brand}: {str(e)}",
+            "error",
+            "high",
+            logger
+        )
+        return False
 
 #---------------------------------- UPDATE USER INFO ----------------------------------
 async def update_user_info(user_id, logger, **kwargs):
@@ -311,12 +311,12 @@ async def update_user_info(user_id, logger, **kwargs):
         return False
 
 #---------------------------------- CREATE NEW USER ----------------------------------
-async def create_new_user(user_id, logger, is_following=False, region='ca', reels_search_count=0, images_search_count=0, created_at=None, updated_at=None):
+async def create_new_user(user_id, logger, is_following=False, location='iran', gender='female', reels_search_count=0, images_search_count=0, created_at=None, updated_at=None):
     try:
         async def operation(conn):
             query = """
-                INSERT INTO users (user_id, is_following, region, reels_search_count, images_search_count, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                INSERT INTO users (user_id, is_following, location, gender, reels_search_count, images_search_count, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 RETURNING user_id
             """
             try:
@@ -324,7 +324,8 @@ async def create_new_user(user_id, logger, is_following=False, region='ca', reel
                     query, 
                     user_id, 
                     is_following, 
-                    region, 
+                    location, 
+                    gender, 
                     reels_search_count, 
                     images_search_count, 
                     created_at or datetime.now(), 
@@ -394,63 +395,9 @@ async def get_generated_query(user_id, query_id, logger):
             logger
         )
         return None
-
-#---------------------------------- GET QUERY ID ----------------------------------
-async def get_query_id(user_id, generated_query, logger):
-    try:
-        async def operation(conn):
-            # Try exact match first
-            query = """
-                SELECT query_id FROM queries WHERE user_id = $1 AND generated_query = $2
-                ORDER BY created_at DESC
-                LIMIT 1
-            """
-            query_id = await conn.fetchval(query, user_id, generated_query)
-            if query_id:
-                return query_id
-
-            # If not found, try a LIKE match (in case of whitespace or minor differences)
-            like_query = """
-                SELECT query_id FROM queries 
-                WHERE user_id = $1 AND generated_query ILIKE $2
-                ORDER BY created_at DESC
-                LIMIT 1
-            """
-            like_pattern = f"%{generated_query.strip()}%"
-            query_id = await conn.fetchval(like_query, user_id, like_pattern)
-            if query_id:
-                logger.info(f"Found query_id with ILIKE fallback for user {user_id}")
-                return query_id
-
-            # As a last resort, try to match by removing all spaces (normalize)
-            norm_query = """
-                SELECT query_id, generated_query FROM queries 
-                WHERE user_id = $1
-                ORDER BY created_at DESC
-            """
-            rows = await conn.fetch(norm_query, user_id)
-            genq_norm = "".join(generated_query.lower().split())
-            for row in rows:
-                db_genq_norm = "".join((row["generated_query"] or "").lower().split())
-                if db_genq_norm == genq_norm:
-                    logger.info(f"Found query_id with normalized fallback for user {user_id}")
-                    return row["query_id"]
-
-            logger.info(f"No query_id found for user {user_id} and generated_query: {generated_query}")
-            return None
-
-        return await execute_db_operation(operation)
-    except Exception as e:
-        await error_handler(
-            f"Error getting query id for user {user_id}: {str(e)}",
-            "error",
-            "medium",
-            logger
-        )
-        return None
         
 #---------------------------------- SAVE QUERY ----------------------------------
-async def save_query(user_id, product_name, generated_query, product_brand, product_model, feedback, logger):
+async def save_query(user_id, product_name, product_brand, product_title, feedback, logger):
     try:
         async def operation(conn):
             # First check if a query with this product_name already exists for this user
@@ -466,12 +413,12 @@ async def save_query(user_id, product_name, generated_query, product_brand, prod
             created_at = datetime.now()
 
             query = """
-                INSERT INTO queries (user_id, created_at, product_name, generated_query, product_brand, product_model, feedback)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                INSERT INTO queries (user_id, created_at, product_name, product_brand, product_title, feedback)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING query_id
             """
             try:
-                query_id = await conn.fetchval(query, user_id, created_at, product_name, generated_query, product_brand, product_model, feedback)
+                query_id = await conn.fetchval(query, user_id, created_at, product_name, product_brand, product_title, feedback)
                 return query_id
             except asyncpg.exceptions.QueryCanceledError:
                 logger.error("Query timeout occurred while saving query")
@@ -525,220 +472,6 @@ async def update_feedback_query(query_id, feedback, logger):
             logger
         )
         return False
-
-#---------------------------------- SAVE PRODUCTS LIST ----------------------------------
-async def save_products(products_list, logger):
-    try:
-        async def operation(conn):
-            product_ids = []
-            for product in products_list:
-                # Check if product already exists
-                check_query = """
-                    SELECT product_id FROM products WHERE product_url = $1
-                """
-                existing_product_id = await conn.fetchval(check_query, product.get('product_url'))
-                
-                if existing_product_id:
-                    product_ids.append(existing_product_id)
-                    continue
-
-                # Skip products with invalid URLs
-                if not product.get('product_url') or product['product_url'] == 'N/A':
-                    continue
-
-                query = """
-                    INSERT INTO products (store_name, product_title, product_url, thumbnail_url, price, rating, review_count, product_brand)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    RETURNING product_id
-                """
-                try:
-                    product_id = await conn.fetchval(
-                        query,
-                        product.get('store_name', 'N/A'),
-                        product.get('product_title', 'N/A'),
-                        product.get('product_url', 'N/A'),
-                        product.get('thumbnail_url', 'N/A'),
-                        product.get('price', 0),
-                        product.get('rating', 0),
-                        product.get('review_count', 0),
-                        product.get('product_brand', 'N/A')
-                    )
-                    if product_id:
-                        product_ids.append(product_id)
-                except asyncpg.exceptions.QueryCanceledError:
-                    logger.error("Query timeout occurred while saving product")
-                    await error_handler(
-                        "Database query timeout while saving product",
-                        "error",
-                        "high",
-                        logger
-                    )
-                    continue
-
-            return product_ids
-
-        return await execute_db_operation(operation)
-    except Exception as e:
-        await error_handler(
-            f"Error saving products list: {str(e)}",
-            "error",
-            "medium",
-            logger
-        )
-        return None
-
-#---------------------------------- SAVE QUERY PRODUCTS ----------------------------------
-async def save_query_products(product_ids, user_id, query_id, logger):
-    try:
-        async def operation(conn):
-            created_at = datetime.now()
-            # Prepare the query for bulk insert
-            query = """
-                INSERT INTO query_products (query_id, product_id, user_id, created_at)
-                VALUES ($1, $2, $3, $4)
-                RETURNING id
-            """
-            
-            # Execute the insert for each product
-            for product_id in product_ids:
-                try:
-                    link_id = await conn.fetchval(query, query_id, product_id, user_id, created_at)
-                    if not link_id:
-                        return False
-                except asyncpg.exceptions.QueryCanceledError:
-                    logger.error("Query timeout occurred while linking product to query")
-                    await error_handler(
-                        "Database query timeout while linking product to query",
-                        "error",
-                        "high",
-                        logger
-                    )
-                    return False
-
-            return True
-
-        return await execute_db_operation(operation)
-    except Exception as e:
-        await error_handler(
-            f"Error saving query products: {str(e)}",
-            "error",
-            "medium",
-            logger
-        )
-        return False
-
-#---------------------------------- SAVE ADDITIONAL PRODUCTS ----------------------------------
-async def save_additional_products(user_id, products_list, logger):
-    """
-    Save additional products for webpage display, replacing any existing ones for the user
-    """
-    try:
-        async def operation(conn):
-            # First, delete any existing additional products for this user
-            delete_query = """
-                DELETE FROM additional_products WHERE user_id = $1
-            """
-            await conn.execute(delete_query, user_id)
-            
-            # Insert new additional products
-            insert_query = """
-                INSERT INTO additional_products (user_id, store_name, product_title, product_url, thumbnail_url, price, rating, review_count, product_brand, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            """
-            
-            created_at = datetime.now()
-            for product in products_list:
-                # Skip products with invalid URLs
-                if not product.get('product_url') or product['product_url'] == 'N/A':
-                    continue
-                    
-                try:
-                    await conn.execute(
-                        insert_query,
-                        user_id,
-                        product.get('store_name', 'N/A'),
-                        product.get('product_title', 'N/A'),
-                        product.get('product_url', 'N/A'),
-                        product.get('thumbnail_url', 'N/A'),
-                        product.get('price', 0),
-                        product.get('rating', 0),
-                        product.get('review_count', 0),
-                        product.get('product_brand', 'N/A'),
-                        created_at
-                    )
-                except asyncpg.exceptions.QueryCanceledError:
-                    logger.error("Query timeout occurred while saving additional product")
-                    await error_handler(
-                        "Database query timeout while saving additional product",
-                        "error",
-                        "high",
-                        logger
-                    )
-                    continue
-            
-            return True
-
-        return await execute_db_operation(operation)
-    except Exception as e:
-        await error_handler(
-            f"Error saving additional products: {str(e)}",
-            "error",
-            "medium",
-            logger
-        )
-        return False
-
-#---------------------------------- GET ADDITIONAL PRODUCTS ----------------------------------
-async def get_additional_products(user_id, logger):
-    """
-    Get additional products for webpage display from the products table
-    """
-    try:
-        async def operation(conn):
-            query = """
-                SELECT p.store_name, p.product_title, p.product_url, p.thumbnail_url, 
-                       p.price, p.rating, p.review_count, p.product_brand
-                FROM products p
-                JOIN query_products qp ON p.product_id = qp.product_id
-                WHERE qp.user_id = $1
-                ORDER BY qp.created_at DESC
-                LIMIT 25
-            """
-            
-            try:
-                rows = await conn.fetch(query, user_id)
-                products = []
-                for row in rows:
-                    products.append({
-                        'store_name': row['store_name'],
-                        'product_title': row['product_title'],
-                        'product_url': row['product_url'],
-                        'thumbnail_url': row['thumbnail_url'],
-                        'price': row['price'],
-                        'rating': row['rating'],
-                        'review_count': row['review_count'],
-                        'product_brand': row['product_brand']
-                    })
-                return products
-            except asyncpg.exceptions.QueryCanceledError:
-                logger.error("Query timeout occurred while getting additional products")
-                await error_handler(
-                    "Database query timeout while getting additional products",
-                    "error",
-                    "high",
-                    logger
-                )
-                return []
-
-        return await execute_db_operation(operation)
-    except Exception as e:
-        await error_handler(
-            f"Error getting additional products: {str(e)}",
-            "error",
-            "medium",
-            logger
-        )
-        return []
 
 #---------------------------------- CLEAN TEMP VARIABLES ----------------------------------
 async def clean_temp_variables(user_id, logger):
@@ -883,58 +616,6 @@ async def insert_temp_variables(user_id, logger, **kwargs):
         )
         return False
 
-#---------------------------------- CHECK DATABASE HEALTH ----------------------------------
-async def check_db_health():
-    """Check database health and restart pool if needed"""
-    global pool
-    try:
-        if pool is None:
-            logger.warning("Database pool is None, initializing...")
-            await init_db_pool()
-            return pool is not None
-            
-        # Get pool stats first
-        stats = await get_pool_stats()
-        #logger.info(f"Database pool stats: {stats}")
-        
-        # Check for pool problems
-        if stats["pool_status"] != "Healthy":
-            logger.warning(f"Pool status is {stats['pool_status']}, reinitializing...")
-            await close_db_pool()
-            await init_db_pool()
-            return pool is not None
-        
-        # Check for connection imbalance (too many acquired connections)
-        if stats["connections_acquired"] > stats["connections_total"] * 0.8:  # 80% threshold
-            logger.warning(f"Too many acquired connections ({stats['connections_acquired']}/{stats['connections_total']}), reinitializing...")
-            await close_db_pool()
-            await init_db_pool()
-            return pool is not None
-            
-        # Attempt a simple query to test database connection with timeout
-        try:
-            async with pool.acquire() as conn:
-                await asyncio.wait_for(conn.fetchval("SELECT 1"), timeout=5.0)
-            return True
-        except (asyncio.TimeoutError, asyncpg.exceptions.PostgresError) as e:
-            logger.error(f"Database connectivity test failed: {str(e)}")
-            logger.info("Attempting to reinitialize database pool...")
-            await close_db_pool()
-            await init_db_pool()
-            return pool is not None
-    except Exception as e:
-        logger.error(f"Database health check failed: {str(e)}")
-        logger.info("Attempting to reinitialize database pool...")
-        try:
-            # Close existing pool if it exists
-            if pool:
-                await close_db_pool()
-            # Create a new pool
-            await init_db_pool()
-            return pool is not None
-        except Exception as e2:
-            logger.error(f"Failed to reinitialize database pool: {str(e2)}")
-            return False
 
 #---------------------------------- DATABASE INITIALIZATION ----------------------------------
 async def initialize_database(logger):
@@ -987,28 +668,12 @@ async def initialize_database(logger):
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
                 is_following BOOLEAN DEFAULT FALSE,
-                region TEXT,
+                location TEXT,
+                gender TEXT,
                 reels_search_count INTEGER DEFAULT 0,
                 images_search_count INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # Create products table if it doesn't exist
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS products (
-                product_id SERIAL PRIMARY KEY,
-                store_name TEXT,
-                product_title TEXT,
-                product_url TEXT,
-                thumbnail_url TEXT,
-                price NUMERIC(10,2),
-                rating NUMERIC(3,2),
-                review_count INTEGER,
-                product_brand TEXT,
-                description TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -1017,22 +682,11 @@ async def initialize_database(logger):
             CREATE TABLE IF NOT EXISTS queries (
                 query_id SERIAL PRIMARY KEY,
                 user_id BIGINT REFERENCES users(user_id),
-                product_name TEXT,
+                product_title TEXT,
                 product_brand TEXT,
-                generated_query TEXT,
+                product_name TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 feedback TEXT
-            )
-        """)
-
-        # Create query_products table if it doesn't exist
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS query_products (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT REFERENCES users(user_id),
-                query_id INTEGER REFERENCES queries(query_id),
-                product_id INTEGER REFERENCES products(product_id),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -1044,7 +698,7 @@ async def initialize_database(logger):
                 post_url TEXT,
                 post_type TEXT,
                 reel_caption TEXT,
-                initial_query TEXT,
+                query_id INTEGER REFERENCES queries(query_id),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -1066,19 +720,6 @@ async def initialize_database(logger):
             )
         """)
 
-        # Create scraping_api_logs table if it doesn't exist
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS scraping_api_logs (
-                id SERIAL PRIMARY KEY,
-                endpoint TEXT,
-                response_time INTEGER,
-                user_id BIGINT,
-                success BOOLEAN,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
         # Create system_logs table if it doesn't exist
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS error_logs (
@@ -1091,15 +732,6 @@ async def initialize_database(logger):
             )
         """)
 
-        # Create baskets table if it doesn't exist
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS baskets (
-                basket_id SERIAL PRIMARY KEY,
-                user_id BIGINT REFERENCES users(user_id),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
         # Create dashboard_settings table if it doesn't exist
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS dashboard_settings (
@@ -1108,47 +740,12 @@ async def initialize_database(logger):
             )
         """)
 
-        # Create basket_products table if it doesn't exist
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS basket_products (
-                id SERIAL PRIMARY KEY,
-                basket_id INTEGER REFERENCES baskets(basket_id),
-                product_id INTEGER REFERENCES products(product_id),
-                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # Create temp_products table if it doesn't exist
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS temp_products (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                batch_number INTEGER NOT NULL,
-                product_title TEXT NOT NULL,
-                product_url TEXT NOT NULL,
-                store_name TEXT NOT NULL,
-                price FLOAT NOT NULL,
-                rating FLOAT DEFAULT 0.0,
-                review_count INTEGER DEFAULT 0,
-                thumbnail_url TEXT,
-                description TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-            )
-        """)
-
         # Create indexes for better performance
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_queries_user_id ON queries(user_id);
-            CREATE INDEX IF NOT EXISTS idx_query_products_query_id ON query_products(query_id);
-            CREATE INDEX IF NOT EXISTS idx_query_products_product_id ON query_products(product_id);
             CREATE INDEX IF NOT EXISTS idx_error_logs_created_at ON error_logs(created_at);
-            CREATE INDEX IF NOT EXISTS idx_baskets_user_id ON baskets(user_id);
-            CREATE INDEX IF NOT EXISTS idx_basket_products_basket_id ON basket_products(basket_id);
             CREATE INDEX IF NOT EXISTS idx_vision_api_logs_user_id ON vision_api_logs(user_id);
             CREATE INDEX IF NOT EXISTS idx_vision_api_logs_created_at ON vision_api_logs(created_at);
-            CREATE INDEX IF NOT EXISTS idx_scraping_api_logs_user_id ON scraping_api_logs(user_id);
-            CREATE INDEX IF NOT EXISTS idx_scraping_api_logs_created_at ON scraping_api_logs(created_at);
         """)
 
         # Close the connection
@@ -1226,128 +823,6 @@ async def periodic_db_health_check():
         # Wait for 60 seconds before next check
         await asyncio.sleep(60)
 
-#---------------------------------- TEMP PRODUCTS MANAGEMENT ----------------------------------
-async def save_temp_products(user_id, products_list, batch_number, logger):
-    try:
-        async def operation(conn):
-            # Insert products into temp_products table
-            query = """
-                INSERT INTO temp_products (
-                    user_id, batch_number, product_title, product_url, store_name,
-                    price, rating, review_count, thumbnail_url, description
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                RETURNING id
-            """
-            product_ids = []
-            for product in products_list:
-                product_id = await conn.fetchval(
-                    query,
-                    user_id,
-                    batch_number,
-                    product.get("product_title"),
-                    product.get("product_url"),
-                    product.get("store_name"),
-                    product.get("price"),
-                    product.get("rating", 0.0),
-                    product.get("review_count", 0),
-                    product.get("thumbnail_url"),
-                    product.get("description")
-                )
-                if product_id:
-                    product_ids.append(product_id)
-            return product_ids
-
-        return await execute_db_operation(operation)
-    except Exception as e:
-        await error_handler(
-            f"Error saving temp products: {str(e)}",
-            "error",
-            "medium",
-            logger
-        )
-        return []
-
-async def get_temp_products_batch(user_id, batch_number, logger):
-    try:
-        async def operation(conn):
-            query = """
-                SELECT product_title, product_url, store_name, price,
-                       rating, review_count, thumbnail_url, description
-                FROM temp_products
-                WHERE user_id = $1 AND batch_number = $2
-                ORDER BY id ASC
-            """
-            rows = await conn.fetch(query, user_id, batch_number)
-            return [dict(row) for row in rows] if rows else []
-
-        return await execute_db_operation(operation)
-    except Exception as e:
-        await error_handler(
-            f"Error getting temp products batch: {str(e)}",
-            "error",
-            "medium",
-            logger
-        )
-        return []
-
-async def clean_temp_products(user_id, logger):
-    try:
-        async def operation(conn):
-            query = "DELETE FROM temp_products WHERE user_id = $1"
-            await conn.execute(query, user_id)
-            return True
-
-        return await execute_db_operation(operation)
-    except Exception as e:
-        await error_handler(
-            f"Error cleaning temp products: {str(e)}",
-            "error",
-            "medium",
-            logger
-        )
-        return False
-
-async def get_max_batch_number(user_id, logger):
-    try:
-        async def operation(conn):
-            query = """
-                SELECT MAX(batch_number)
-                FROM temp_products
-                WHERE user_id = $1
-            """
-            return await conn.fetchval(query, user_id) or 0
-
-        return await execute_db_operation(operation)
-    except Exception as e:
-        await error_handler(
-            f"Error getting max batch number: {str(e)}",
-            "error",
-            "medium",
-            logger
-        )
-        return 0
-
-async def update_max_batch_number(user_id, new_max_batch, logger):
-    try:
-        async def operation(conn):
-            # Delete any batches higher than the new max
-            query = """
-                DELETE FROM temp_products 
-                WHERE user_id = $1 AND batch_number > $2
-            """
-            await conn.execute(query, user_id, new_max_batch)
-            return True
-
-        return await execute_db_operation(operation)
-    except Exception as e:
-        await error_handler(
-            f"Error updating max batch number: {str(e)}",
-            "error",
-            "medium",
-            logger
-        )
-        return False
 
 #---------------------------------- GET ACTIVE MODEL ----------------------------------
 async def get_active_model():
