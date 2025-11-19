@@ -6,18 +6,13 @@ import os
 import http.client
 import uuid
 import asyncio
-import sentry_sdk
-import backoff
-from bs4 import BeautifulSoup
 import re
-from google.api_core.exceptions import TooManyRequests
 from fastapi import Request
 import openai
 import time
 from datetime import datetime
 import shutil
 from google.genai import types
-from tenacity import retry, stop_after_attempt, wait_exponential
 from urllib.parse import urlparse, parse_qs, quote, quote_plus, unquote
 import base64
 import json
@@ -25,14 +20,9 @@ from dotenv import load_dotenv
 import requests
 from get_text import get_text
 from db import (
-    get_user_info, save_query, 
-    save_products, save_query_products,
-    vision_api_call, scraping_api_call,
-    update_user_info, error_handler,
+    save_query, error_handler,
     clean_temp_variables,
-    save_temp_products, get_max_batch_number, get_temp_products_batch,
-    clean_temp_products, update_max_batch_number, get_query_id,
-    get_temp_variables, execute_db_operation, insert_temp_variables,
+    get_temp_variables,
     get_active_model
 )
 from pathlib import Path
@@ -198,7 +188,7 @@ async def process_instagram_post(attachment_url, reel_caption, user_id, client, 
                 query_id = await save_query(
                     user_id=user_id,
                     product_name=product_name,
-                    product_brand=details['product_brand'].lower(),
+                    product_brand=details['product_brand'].lower() if details['product_brand'] != 'N/A' else 'N/A',
                     product_title=details['product_title'],
                     feedback=None,
                     logger=logger
@@ -226,7 +216,7 @@ async def process_instagram_post(attachment_url, reel_caption, user_id, client, 
                 return 'no_narration_generated'
 
         for narration_text in generated_narration:
-            voice_success = narration_to_voice(narration_text, gemini_client, user_id, logger)
+            voice_success = await narration_to_voice(narration_text, gemini_client, user_id, logger)
             if not voice_success:
                 return 'no_voice_generated'
 
@@ -829,7 +819,6 @@ async def verify_webhook_call(request: Request, logger):
 
 #------------------------------------* GEMINI MESSAGE PROCESSOR *------------------------------------
 async def process_message_with_gemini(
-    user_id: str, 
     user_message: str, 
     gemini_client,
     logger
@@ -838,7 +827,6 @@ async def process_message_with_gemini(
     Process user message using Gemini model to determine message type and generate appropriate response.
     
     Args:
-        user_id: The user's ID
         message: The user's message
         gemini_client: The Gemini client instance from zeebra_main
         logger: Logger instance
@@ -860,7 +848,7 @@ async def process_message_with_gemini(
         
         # Add conversation history dict to the prompt for Gemini
         response = chat.send_message(f"""
-        Analyze the user's message and previous query to determine the appropriate response.
+        Analyze the user's message to determine the appropriate response.
 
         Here is the user's message:
         {user_message}
@@ -873,7 +861,7 @@ async def process_message_with_gemini(
         }}
         For product_brand:
         - Determine if user message contains product brand.
-        - If it contains, return "product_brand" for message_type and the product brand.
+        - If it contains, return "product_brand" for message_type and the product brand as the response.
         - If it doesn't contain, return "general" for message_type and ask the user to share the product brand.
 
         Examples:
@@ -881,13 +869,13 @@ async def process_message_with_gemini(
         Output:
         {{
             "message_type": "product_brand",
-            "response": "Nike",
+            "response": "Nike Air Max 270",
         }}
         User: "I saw a Samsung Galaxy Buds 2 Pro in the video, can you find that?"
         Output:
         {{
             "message_type": "product_brand",
-            "response": "Samsung",
+            "response": "Samsung Galaxy Buds 2 Pro",
         }}
         """)
 
@@ -956,10 +944,10 @@ async def process_message_with_gemini(
 
 
 #------------------------------------* CLEAR TEMP PRODUCTS *------------------------------------
-async def main_brain_message_processor(user_id, user_message, ai_client, logger):
+async def main_brain_message_processor(user_id, user_message, ai_client, location, logger):
     try:
 
-        message_type, response = await process_message_with_gemini(user_id, user_message, ai_client['client'], logger)
+        message_type, response = await process_message_with_gemini(user_message, ai_client['client'], logger)
         logger.info(f"message_type: {message_type}")
         logger.info(f"response: {response}")
 
@@ -970,6 +958,7 @@ async def main_brain_message_processor(user_id, user_message, ai_client, logger)
             else:
                 general_message_text = get_text('general_message')
                 await send_message_to_user(general_message_text, user_id, logger)
+            return True
         
         # Product brand
         elif message_type == "product_brand":
@@ -977,14 +966,30 @@ async def main_brain_message_processor(user_id, user_message, ai_client, logger)
             if temp_variables:
                 query_id = temp_variables.get('query_id')
                 updated = await update_query(query_id, user_id, response, logger)
-                if updated:
-                    return True
+                query_info = await get_query_info(user_id, query_id, logger)
+                if query_info:
+                    product_name = query_info.get('product_name')
+                    product_brand = query_info.get('product_brand')
+                    product_info = {
+                        'product_title': product_name,
+                        'product_brand': product_brand
+                    }
+                    generated_narration = await query_to_narration(product_info, location, logger)
+                    if not generated_narration:
+                        return False
+
+                    for narration_text in generated_narration:
+                        voice_success = await narration_to_voice(narration_text, ai_client['client'], user_id, logger)
+                        if not voice_success:
+                            return False
+                        
+                        await send_message_to_user(voice_success, user_id, logger)
+                        return True
                 else:
                     return False
+
             else:
                 return False
-        
-        return True
         
     except Exception as e:
         await error_handler(

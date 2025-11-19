@@ -19,14 +19,14 @@ VOICES_PATH = "./voices"
 
 
 #------------------------------------* HELPER FUNCTIONS *------------------------------------
-def save_binary_file(file_name, data):
+async def save_binary_file(file_name, data):
     """Save binary data to a file."""
     with open(file_name, "wb") as f:
         f.write(data)
     print(f"File saved to: {file_name}")
 
 
-def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
+async def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     """
     Generates a WAV file header for the given audio data and parameters.
 
@@ -37,7 +37,7 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     Returns:
         A bytes object representing the WAV file header.
     """
-    parameters = parse_audio_mime_type(mime_type)
+    parameters = await parse_audio_mime_type(mime_type)
     bits_per_sample = parameters["bits_per_sample"]
     sample_rate = parameters["rate"]
     num_channels = 1
@@ -67,7 +67,7 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     return header + audio_data
 
 
-def parse_audio_mime_type(mime_type: str) -> dict:
+async def parse_audio_mime_type(mime_type: str) -> dict:
     """
     Parses bits per sample and rate from an audio MIME type string.
 
@@ -102,7 +102,7 @@ def parse_audio_mime_type(mime_type: str) -> dict:
 
 
 #------------------------------------* MAIN FUNCTION *------------------------------------
-def narration_to_voice(
+async def narration_to_voice(
     narration_text: str,
     gemini_client,
     output_filename: str = None,
@@ -218,11 +218,11 @@ def narration_to_voice(
                 file_extension = mimetypes.guess_extension(inline_data.mime_type)
                 if file_extension is None:
                     file_extension = ".wav"
-                    data_buffer = convert_to_wav(inline_data.data, inline_data.mime_type)
+                    data_buffer = await convert_to_wav(inline_data.data, inline_data.mime_type)
                 
                 # Save file
                 file_path = os.path.join(voices_dir, f"{file_name}{file_extension}")
-                save_binary_file(file_path, data_buffer)
+                await save_binary_file(file_path, data_buffer)
                 generated_files.append(file_path)
                 file_index += 1
             else:

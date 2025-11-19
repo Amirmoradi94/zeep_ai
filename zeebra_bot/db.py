@@ -356,13 +356,13 @@ async def create_new_user(user_id, logger, is_following=False, location='iran', 
         )
         return None
     
-#---------------------------------- GET GENERATED QUERY ----------------------------------
-async def get_generated_query(user_id, query_id, logger):
+#---------------------------------- GET QUERY INFO ----------------------------------
+async def get_query_info(user_id, query_id, logger):
     try:
         async def operation(conn):
-            # Query to get the most recent generated query for the given product
+            # Query to get the most recent query info for the given product
             query = """
-                SELECT generated_query 
+                SELECT product_name, product_brand, product_title 
                 FROM queries 
                 WHERE user_id = $1 
                 AND query_id = $2 
@@ -370,16 +370,18 @@ async def get_generated_query(user_id, query_id, logger):
                 LIMIT 1
             """
             try:
-                result = await conn.fetchval(query, user_id, query_id)
+                result = await conn.fetchrow(query, user_id, query_id)
                 if result:
-                    #logger.info(f"Found existing query for product: {query_id}")
-                    return result
-                logger.info(f"No existing query found for product: {query_id}")
+                    return {
+                        'product_name': result.get('product_name'),
+                        'product_brand': result.get('product_brand'),
+                        'product_title': result.get('product_title')
+                    }
                 return None
             except asyncpg.exceptions.QueryCanceledError:
-                logger.error("Query timeout occurred while getting generated query")
+                logger.error("Query timeout occurred while getting query info")
                 await error_handler(
-                    "Database query timeout while getting generated query",
+                    "Database query timeout while getting query info",
                     "error",
                     "high",
                     logger
@@ -389,7 +391,7 @@ async def get_generated_query(user_id, query_id, logger):
         return await execute_db_operation(operation)
     except Exception as e:
         await error_handler(
-            f"Error getting generated query for query {query_id}: {str(e)}",
+            f"Error getting query info for query {query_id}: {str(e)}",
             "error",
             "medium",
             logger
@@ -620,13 +622,24 @@ async def insert_temp_variables(user_id, logger, **kwargs):
 #---------------------------------- DATABASE INITIALIZATION ----------------------------------
 async def initialize_database(logger):
     try:
+        # Check if database environment variables are set
+        if not all([DB_HOST, DB_NAME, DB_USER, DB_PASSWORD]):
+            logger.error("Database environment variables not set. Please set DB_HOST, DB_NAME, DB_USER, and DB_PASSWORD")
+            return False
+        
+        logger.info(f"Connecting to database at {DB_HOST}:{DB_PORT}...")
         # First, connect to the default 'postgres' database to check/create our database
-        default_conn = await asyncpg.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            database='postgres',  # Always connect to the default postgres database first
-            user=DB_USER,
-            password=DB_PASSWORD
+        # Add timeout to prevent hanging
+        default_conn = await asyncio.wait_for(
+            asyncpg.connect(
+                host=DB_HOST,
+                port=DB_PORT,
+                database='postgres',  # Always connect to the default postgres database first
+                user=DB_USER,
+                password=DB_PASSWORD,
+                timeout=10.0  # 10 second timeout
+            ),
+            timeout=15.0  # Overall timeout
         )
         
         # Check if our database exists
@@ -646,12 +659,16 @@ async def initialize_database(logger):
         await default_conn.close()
         
         # Now connect to our database to create tables
-        conn = await asyncpg.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            database=DB_NAME,
-            user=DB_USER,
-            password=DB_PASSWORD
+        conn = await asyncio.wait_for(
+            asyncpg.connect(
+                host=DB_HOST,
+                port=DB_PORT,
+                database=DB_NAME,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                timeout=10.0  # 10 second timeout
+            ),
+            timeout=15.0  # Overall timeout
         )
         
         if not conn:
@@ -754,7 +771,17 @@ async def initialize_database(logger):
         logger.info("Database tables initialized successfully")
         return True
 
+    except asyncio.TimeoutError:
+        logger.error(f"Database connection timeout. Is PostgreSQL running at {DB_HOST}:{DB_PORT}?")
+        await error_handler(
+            f"Database connection timeout - check if PostgreSQL is running",
+            "error",
+            "high",
+            logger
+        )
+        return False
     except Exception as e:
+        logger.error(f"Error initializing database: {str(e)}")
         await error_handler(
             f"Error initializing database: {str(e)}",
             "error",

@@ -5,13 +5,11 @@ import os
 from dotenv import load_dotenv
 from openai import OpenAI
 from get_text import get_text
-from google import genai
+from google import genai as google_genai
 import uvicorn
 from utils import *
 from fastapi.middleware.cors import CORSMiddleware
 import logging
-import sentry_sdk
-from sentry_sdk.integrations.fastapi import FastApiIntegration
 from datetime import datetime
 from contextlib import asynccontextmanager
 import time
@@ -21,34 +19,21 @@ from db import (
     init_db_pool,
     update_user_info, update_feedback_query,
     get_temp_variables, 
-    insert_temp_variables, check_db_health,
-    periodic_db_health_check, get_additional_products,
-    save_temp_products, get_temp_products_batch,
-    clean_temp_products, get_max_batch_number,
-    get_generated_query, get_active_model, is_saving_training_data
-)
-from utils import (
-    render_products_template,
-    handle_more_products_request,
-    error_handler,
-    is_following,
-    send_message_to_user,
-    send_follow_postback_message,
-    process_instagram_post,
-    save_frames_with_query_id,
-    clean_memory_and_temp_variables,
-    verify_webhook_call,
-    main_brain_message_processor,
-    send_feedback_postback_message,
-    search_and_save_products,
-    send_more_products_postback_message,
-    is_duplicate_message, 
-    get_ai_client
+    insert_temp_variables,
+    periodic_db_health_check
 )
 import asyncio
-import asyncpg
 
-from conversation_manager import get_conversation_history, clear_conversation_history, add_to_conversation_history, conversation_history
+#------------------------------------* CONFIGURE LOGGING *------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 #------------------------------------* REQUEST DEDUPLICATION *------------------------------------
 # Simple in-memory cache to prevent duplicate processing
@@ -89,7 +74,7 @@ restricted_product_message_sent_text = get_text('restricted_product_message_sent
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 gemini_api_key = os.getenv("GEMINI_API_KEY")
-gemini_client = genai.Client(api_key=gemini_api_key.strip())
+gemini_client = google_genai.Client(api_key=gemini_api_key.strip())
 
 #------------------------------------* GET AI CLIENT *------------------------------------
 ai_client = None
@@ -98,10 +83,21 @@ ai_client = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global ai_client
-    await initialize_database(logger)  # Initialize database and tables first
-    await init_db_pool()  # Then create the connection pool
-    asyncio.create_task(periodic_db_health_check())
-    ai_client = await get_ai_client(openai_client, gemini_client)  # Initialize AI client
+    try:
+        logger.info("Starting application startup...")
+        db_init_success = await initialize_database(logger)  # Initialize database and tables first
+        if db_init_success:
+            logger.info("Database initialized successfully")
+            await init_db_pool()  # Then create the connection pool
+            asyncio.create_task(periodic_db_health_check())
+        else:
+            logger.warning("Database initialization failed, continuing without database")
+        
+        ai_client = await get_ai_client(openai_client, gemini_client)  # Initialize AI client
+        logger.info("Application startup complete")
+    except Exception as e:
+        logger.error(f"Error during startup: {e}", exc_info=True)
+        # Continue anyway - server can still handle requests that don't need DB
     yield
 
 #------------------------------------* CREATE FASTAPI APP *------------------------------------
@@ -116,19 +112,6 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
-#------------------------------------* CONFIGURE LOGGING *------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('app.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-
-
 #------------------------------------* VERIFY WEBHOOK *------------------------------------
 # GET /webhook for verification
 @app.get("/webhook")
@@ -141,6 +124,8 @@ async def verify_webhook_get(request: Request):
     # Check if the request is not from facebook, ignore it.
     if not mode or not token or not challenge:
         return
+    
+    logger.info(os.getenv('VERIFY_TOKEN'))
     if mode == "subscribe" and token == os.getenv('VERIFY_TOKEN'):
         # Return challenge as an integer instead of a string to match Facebook's expected format
         if challenge:
@@ -210,13 +195,13 @@ async def handle_webhook_post(request: Request):
     is_user_following = await is_following(user_id, logger)
     
     # Get user info
-    user_info = await get_user_info(user_id, ['user_id'], logger)
+    user_info = await get_user_info(user_id, ['user_id', 'location'], logger)
     if not user_info:
         user_created = await create_new_user(
             user_id, 
             logger,
             is_following=is_user_following, 
-            region='iran', 
+            location='iran', 
             reels_search_count=0,
             images_search_count=0,
             created_at=datetime.now(), 
@@ -226,6 +211,11 @@ async def handle_webhook_post(request: Request):
         if not user_created:
             await send_message_to_user(internal_error_text, user_id, logger)
             return {"status": "error_creating_user"}
+        # Get location after creating user
+        user_info = await get_user_info(user_id, ['user_id', 'location'], logger)
+    
+    # Get location from user info, default to 'iran' if not set
+    location = user_info.get('location', 'iran') if user_info else 'iran'
 
     # Message Handling
     if message_element:
@@ -253,7 +243,7 @@ async def handle_webhook_post(request: Request):
         else:
             user_message = message_element.get('text')
             if user_message:
-                success = await main_brain_message_processor(user_id, user_message, ai_client, logger)
+                success = await main_brain_message_processor(user_id, user_message, ai_client, location, logger)
                 if not success:
                     await send_message_to_user(internal_error_text, user_id, logger)
                     return {"status": "error_processing_message"}
@@ -281,7 +271,7 @@ async def handle_webhook_post(request: Request):
         
         # User is following and the attachment is an image, reel or share
         await send_message_to_user(analyzing_post_text, user_id, logger)
-        processing_result = await process_instagram_post(attachment_url, reel_caption, user_id, ai_client, attachment_type, 'iran', logger)
+        processing_result = await process_instagram_post(attachment_url, reel_caption, user_id, ai_client, attachment_type, location, logger)
         if type(processing_result) == str:
             if processing_result != 'voice_generated':
                 await send_message_to_user(get_text(processing_result), user_id, logger)
@@ -315,27 +305,8 @@ async def handle_webhook_post(request: Request):
                     await send_message_to_user(good_feedback_message_text, user_id, logger)
                 elif feedback_type == "bad":
                     await send_message_to_user(bad_feedback_message_text, user_id, logger)
-                    #add_to_conversation_history(user_id, "assistant", bad_feedback_message_text)
-                    result_of_postback = await send_more_products_postback_message(user_id, query_id, logger)
-                    if not result_of_postback:
-                        await send_message_to_user(no_more_products_text, user_id, logger)
-                        return {"status": "error_sending_more_products_postback_message"}
             return {"status": "feedback_handled"}
                 
-        # Handle more products postbacks
-        elif payload.startswith("SHOW_MORE_PRODUCTS_"):
-            parts = payload.split("_")
-            if len(parts) >= 3:
-                query_id = int(parts[3])
-                #logger.info(f"query_id: {query_id}")
-                await handle_more_products_request(user_id, query_id, logger)
-            return {"status": "more_products_shown"}
-            
-        elif payload == "NO_MORE_PRODUCTS":
-            #await clean_temp_products(user_id, logger)
-            await send_message_to_user(no_more_products_text, user_id, logger)
-            return {"status": "no_more_products"}
-
         # Handle confirm follow postback
         elif payload == "CONFIRM_FOLLOW_POSTBACK":
             if is_user_following:
@@ -357,73 +328,62 @@ async def handle_webhook_post(request: Request):
                 
             query_id = int(parts[0])
             product_name = parts[1].replace('_', ' ')
-            product_brand = parts[-1].replace('_', ' ')
+            product_brand = parts[2].replace('_', ' ')
 
-            generated_query = await get_generated_query(user_id, query_id, logger)
-            #add_to_conversation_history(user_id, "assistant", f"Generated search query for {product_name}: {generated_query}")
-            if generated_query:
-                logger.info(f"initial query changed to: {generated_query}")
-                await insert_temp_variables(user_id, logger, initial_query=generated_query)
+            if product_brand == 'N/A':
+                await send_message_to_user(ask_user_for_product_brand_text, user_id, logger)
+                return {"status": "ask_user_for_product_brand"}
 
-                # Get query from database for the selected product
-                top_products = await search_and_save_products(user_id, product_name, product_brand, generated_query, query_id, logger)
-            
-                if not top_products:
-                    await send_message_to_user(no_products_found_text, user_id, logger)
-                    return {"status": "no_products_found"}
-            
-                response = await send_message_to_user(top_products, user_id, logger)
-                if response:
-                    await send_feedback_postback_message(user_id, query_id, logger)
-                    return {"status": "products_sent"}
+            product_info = {
+                'product_title': product_name,
+                'product_brand': product_brand
+            }
+            generated_narration = await query_to_narration(product_info, location, logger)
+            if not generated_narration:
+                await send_message_to_user(no_narration_generated_text, user_id, logger)
+                return {"status": "no_narration_generated"}
 
-            return {"status": "product_selection_processed"}
+            for narration_text in generated_narration:
+                voice_success = await narration_to_voice(narration_text, ai_client['client'], user_id, logger)
+                if not voice_success:
+                    await send_message_to_user(no_voice_generated_text, user_id, logger)
+                    return {"status": "no_voice_generated"}
+                
+                await send_message_to_user(voice_success, user_id, logger)
+                return {"status": "voice_sent_successfully"}
 
         # Handle stored post processing
         temp_variables = await get_temp_variables(user_id, ['post_url', 'post_type', 'reel_caption'], logger)
         if temp_variables:  # Only proceed if temp_variables exists
-            post_url = temp_variables.get('post_url')
-            post_type = temp_variables.get('post_type')
+            attachment_url = temp_variables.get('post_url')
+            attachment_type = temp_variables.get('post_type')
             reel_caption = temp_variables.get('reel_caption')
             
-            if post_url and post_type:
+            if attachment_url and attachment_type:
                 # User attached an invalid post
-                if post_type not in ['image', 'share', 'ig_reel']:
+                if attachment_type not in ['image', 'share', 'ig_reel']:
                     await send_message_to_user(correct_post_format_text, user_id, logger)
                     return {"status": "correct_post_format"}
                 
                 # Process the instagram post
-                top_products, query_id, default_url = await process_instagram_post(post_url, reel_caption, user_id, ai_client, post_type, 'ca', logger)
-                # User's selected product is found and now we can send the products
-                if top_products:
-                    response = await send_message_to_user(top_products, user_id, logger)
-                    if response:
-                        await send_feedback_postback_message(user_id, query_id, logger)
-                        generated_query = await get_generated_query(user_id, query_id, logger)
-                        if generated_query:
-                            logger.info(f"initial query changed to: {generated_query}")
-                            await insert_temp_variables(user_id, logger, initial_query=generated_query)
-                    return {"status": "products_sent"}
-
-                elif query_id == 'select_product_postback_message_sent':
-                    list_product_names, query_ids, list_product_brands = default_url
-                    await send_select_product_postback_message(user_id, list_product_names, query_ids, list_product_brands, logger)
-                    if await is_saving_training_data():
-                        logger.info(f"now saving frames with query_ids: {query_ids}")
-                        await save_frames_with_query_id(user_id, query_ids, logger)
+                processing_result = await process_instagram_post(attachment_url, reel_caption, user_id, ai_client, attachment_type, location, logger)
+                if type(processing_result) == str:
+                    if processing_result != 'voice_generated':
+                        await send_message_to_user(get_text(processing_result), user_id, logger)
+                        return {"status": processing_result}
+                elif type(processing_result) == tuple:
+                    list_product_names, query_ids, list_product_brands, list_product_titles = processing_result
+                    await send_select_product_postback_message(user_id, list_product_names, query_ids, list_product_brands, list_product_titles, logger)
                     return {"status": "select_product_postback_message_sent"}
-
-                elif query_id in ['restricted_product_message_sent', 'no_products_found']:
-                    if query_id == 'restricted_product_message_sent':
-                        await send_message_to_user(restricted_product_message_sent_text, user_id, logger)
-                    elif query_id == 'no_products_found':
-                        await send_message_to_user(no_products_found_text, user_id, logger)
-                    return {"status": "no_products_found"}
                 
-                # Error handling for instagram post processing in postback
+                # User's reel or image contains only one product
+                if processing_result == 'voice_generated':
+                    await send_message_to_user(True, user_id, logger)
+                    return {"status": "voice_generated"}
+
                 else:
                     await send_message_to_user(internal_error_text, user_id, logger)
-                    return {"status": "error_processing_instagram_post"}
+                    return {"status": "error_processing_instagram_post_in_postback"}
 
     # Clean up the processing request
     if 'message_id' in locals() and message_id:
