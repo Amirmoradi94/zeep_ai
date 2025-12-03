@@ -13,7 +13,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("zeebra.log", encoding='utf-8'),
+        logging.FileHandler("zeep.log", encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -509,13 +509,13 @@ async def clean_temp_variables(user_id, logger):
 async def get_temp_variables(user_id, fields=None, logger=None):
     """
     Fetches the most recent temp_variables row for a user, returning a dict of the requested fields.
-    If fields is None, defaults to ['post_url', 'post_type', 'reel_caption', 'initial_query'].
+    If fields is None, defaults to ['post_url', 'post_type', 'reel_caption'].
     Returns None if no row is found.
     """
     try:
         async def operation(conn):
             # Defensive: avoid mutable default argument
-            selected_fields = fields if fields is not None else ['post_url', 'post_type', 'reel_caption', 'initial_query']
+            selected_fields = fields if fields is not None else ['post_url', 'post_type', 'reel_caption']
 
             # Build the SELECT query dynamically
             select_fields = ', '.join(selected_fields)
@@ -820,35 +820,6 @@ async def get_pool_stats():
             "connections_free": -1,
             "error": str(e)
         }
-
-#---------------------------------- PERIODIC HEALTH CHECK ----------------------------------
-async def periodic_db_health_check():
-    """Run periodic health checks on the database connection pool
-    
-    This function should be scheduled to run periodically, e.g.:
-    
-    import asyncio
-    asyncio.create_task(periodic_db_health_check())
-    """
-    while True:
-        try:
-            is_healthy = await check_db_health()
-            
-            if not is_healthy:
-                await error_handler(
-                    "Database health check failed, attempting recovery...",
-                    "error",
-                    "critical",
-                    logger
-                )
-                # Try to close and reinitialize the pool
-                await close_db_pool()
-                await init_db_pool()
-        except Exception as e:
-            logger.error(f"Error during periodic health check: {str(e)}")
-        
-        # Wait for 60 seconds before next check
-        await asyncio.sleep(60)
 
 
 #---------------------------------- GET ACTIVE MODEL ----------------------------------

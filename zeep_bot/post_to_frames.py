@@ -208,6 +208,12 @@ async def post_to_frames(post_url: str, user_id: int, post_type: str = None, log
             return True
         
         elif post_type in ['ig_reel', 'video']:
+            logger.info("Processing as video/reel post")
+            # Define the reel path
+            videos_dir = f"{VIDEOS_PATH}/{user_id}/"
+            os.makedirs(videos_dir, exist_ok=True)
+            reel_path = f"{videos_dir}reel.mp4"
+            
             success = await download_reel(post_url, reel_path, logger)
             if not success:
                 return False

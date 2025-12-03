@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  zeep_db:
+    container_name: zeep_db
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: zeep_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - zeep_db_data:/var/lib/postgresql/data
+    networks:
+      - zeep-local
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Zeep Bot Application
+  zeep_bot:
+    container_name: zeep_bot
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_HOST=zeep_db
+      - DB_PORT=5432
+      - DB_NAME=zeep_db
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+    env_file:
+      - .env
+    volumes:
+      - ./zeep_bot:/app/zeep_bot
+      - ./voices:/app/voices
+      - ./videos:/app/videos
+      - ./frames:/app/frames
+      - ./audios:/app/audios
+      - ./saved_images:/app/saved_images
+    depends_on:
+      zeep_db:
+        condition: service_healthy
+    networks:
+      - zeep-local
+
+volumes:
+  zeep_db_data:
+
+networks:
+  zeep-local:
+    driver: bridge
+

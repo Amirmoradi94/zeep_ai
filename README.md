@@ -4,7 +4,7 @@ This directory contains all the Docker configuration files for the BeeBlue Shop 
 
 ## Structure
 
-- `bot/`: Docker files for the main Zeebra bot service
+- `bot/`: Docker files for the main Zeep bot service
 - `db/`: Docker files for the PostgreSQL database
 - `nginx/`: Docker files for the Nginx web server
 

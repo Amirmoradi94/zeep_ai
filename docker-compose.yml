@@ -14,7 +14,7 @@ services:
     expose:
       - 44302
     networks:
-      - internal-zeebra
+      - internal-zeep
       - nginx-proxy
 
   bb_db_prod:
@@ -30,7 +30,7 @@ services:
     expose:
       - 5432
     networks:
-      - internal-zeebra
+      - internal-zeep
 
   bb_website_prod:
     container_name: bb_website_prod
@@ -43,7 +43,7 @@ services:
     expose:
       - 8080
     networks:
-      - internal-zeebra
+      - internal-zeep
 
   bb_adminer_prod:
     image: adminer
@@ -51,14 +51,14 @@ services:
     expose:
       - 8080
     networks:
-      - internal-zeebra
+      - internal-zeep
 
   bb_bot_prod:
     container_name: bb_bot_prod
     restart: always
     build:
       context: .
-      dockerfile: ./docker/zeebra_bot/Dockerfile
+      dockerfile: ./docker/zeep_bot/Dockerfile
     # healthcheck:
     #   test: [ "CMD", "curl", "-f", "http://localhost:5000/health" ]
     #   interval: 30s
@@ -66,7 +66,7 @@ services:
     #   retries: 3
     #   start_period: 40s
     env_file:
-      - docker/zeebra_bot/.prod.env
+      - docker/zeep_bot/.prod.env
     volumes:
       - ./reels:/app/reels
       - ./logs:/app/logs
@@ -76,7 +76,7 @@ services:
     depends_on:
       - bb_db_prod
     networks:
-      - internal-zeebra
+      - internal-zeep
 
   bb_dashboard:
     container_name: bb_dashboard
@@ -91,7 +91,7 @@ services:
     # depends_on:
       # - bb_dashboard_backend
     networks:
-      - internal-zeebra
+      - internal-zeep
 
   bb_dashboard_backend:
     container_name: bb_dashboard_backend
@@ -106,13 +106,13 @@ services:
     depends_on:
       - bb_db_prod
     networks:
-      - internal-zeebra
+      - internal-zeep
 
 volumes:
   bb_db_data_prod:
 
 networks:
-  internal-zeebra:
+  internal-zeep:
     driver: bridge
   nginx-proxy:
     external: true

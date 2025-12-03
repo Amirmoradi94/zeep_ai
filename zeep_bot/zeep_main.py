@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from get_text import get_text
 from google import genai as google_genai
+from query_to_narration import query_to_narration
+from narration_to_voice import narration_to_voice
 import uvicorn
 from utils import *
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,9 +22,7 @@ from db import (
     update_user_info, update_feedback_query,
     get_temp_variables, 
     insert_temp_variables,
-    periodic_db_health_check
 )
-import asyncio
 
 #------------------------------------* CONFIGURE LOGGING *------------------------------------
 logging.basicConfig(
@@ -57,6 +57,7 @@ general_message_text = get_text('general_message')
 post_deleted_text = get_text('post_deleted')
 correct_post_format_text = get_text('correct_post_format')
 analyzing_post_text = get_text('analyzing_post')
+deep_analysis_message_text = get_text('deep_analysis_message')
 follow_page_text = get_text('follow_page')
 good_feedback_message_text = get_text('GOOD_feedback_message')
 bad_feedback_message_text = get_text('BAD_feedback_message')
@@ -89,7 +90,6 @@ async def lifespan(app: FastAPI):
         if db_init_success:
             logger.info("Database initialized successfully")
             await init_db_pool()  # Then create the connection pool
-            asyncio.create_task(periodic_db_health_check())
         else:
             logger.warning("Database initialization failed, continuing without database")
         
@@ -176,13 +176,13 @@ async def handle_webhook_post(request: Request):
         # Clean up cache if it gets too large
         cleanup_processing_cache()
     
-        postback_message = output_message.get('postback', None)
+    postback_message = output_message.get('postback', None)
     message_element = output_message.get('message', None)
 
     # Check if user sent a message within 30 seconds (ignore rapid messages)
     # Postback messages are excluded from cooldown checks
     is_postback = postback_message is not None
-    if await is_duplicate_message(user_id, message_id, is_postback):
+    if await is_duplicate_message(message_id):
         #logger.info(f"Message from user {user_id} ignored - sent within 45 second cooldown period")
         return {"status": "message_ignored_cooldown"}
 
@@ -234,7 +234,7 @@ async def handle_webhook_post(request: Request):
                 attachment_url = attachment_payload.get('url')
                 #logger.info(f"attachment_url: {attachment_url}")
                 reel_caption = attachment_payload.get('title') if attachment_type == 'ig_reel' else None
-                temp_variables_inserted = await insert_temp_variables(user_id, logger, post_url=attachment_url, post_type=attachment_type, reel_caption=reel_caption, initial_query='None')
+                temp_variables_inserted = await insert_temp_variables(user_id, logger, post_url=attachment_url, post_type=attachment_type, reel_caption=reel_caption)
             else:
                 await send_message_to_user(internal_error_text, user_id, logger)
                 return {"status": "error_inserting_temp_variables"}
@@ -271,6 +271,7 @@ async def handle_webhook_post(request: Request):
         
         # User is following and the attachment is an image, reel or share
         await send_message_to_user(analyzing_post_text, user_id, logger)
+        logger.info("now processing instagram post")
         processing_result = await process_instagram_post(attachment_url, reel_caption, user_id, ai_client, attachment_type, location, logger)
         if type(processing_result) == str:
             if processing_result != 'voice_generated':
@@ -334,17 +335,25 @@ async def handle_webhook_post(request: Request):
                 await send_message_to_user(ask_user_for_product_brand_text, user_id, logger)
                 return {"status": "ask_user_for_product_brand"}
 
+            # Send deep analysis message to user immediately
+            await send_message_to_user(deep_analysis_message_text, user_id, logger)
+
             product_info = {
                 'product_title': product_name,
                 'product_brand': product_brand
             }
-            generated_narration = await query_to_narration(product_info, location, logger)
+            generated_narration = query_to_narration(product_info, location, logger)
             if not generated_narration:
                 await send_message_to_user(no_narration_generated_text, user_id, logger)
                 return {"status": "no_narration_generated"}
 
             for narration_text in generated_narration:
-                voice_success = await narration_to_voice(narration_text, ai_client['client'], user_id, logger)
+                voice_success = await narration_to_voice(
+                    narration_text=narration_text, 
+                    gemini_client=ai_client['client'], 
+                    user_id=user_id, 
+                    logger=logger
+                )
                 if not voice_success:
                     await send_message_to_user(no_voice_generated_text, user_id, logger)
                     return {"status": "no_voice_generated"}

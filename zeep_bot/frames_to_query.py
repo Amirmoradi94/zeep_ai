@@ -2,7 +2,9 @@ import os
 import json
 import time
 import re
+import base64
 from pathlib import Path
+from google.genai import types
 
 #------------------------------------* FRAMES TO SEARCH QUERY GEMINI *------------------------------------
 FRAMES_PATH = "./frames"
@@ -15,6 +17,7 @@ GEMINI_OUTPUT_TOKENS = 50  # output tokens
 
 
 async def frames_to_search_query_gemini(user_id, gemini_client, reel_caption, logger):
+    logger.info("now in frames_to_search_query_gemini")
     frames_path = f"{FRAMES_PATH}/{user_id}/"
     image_files = []
     all_images = os.listdir(frames_path)
@@ -116,26 +119,34 @@ async def frames_to_search_query_gemini(user_id, gemini_client, reel_caption, lo
         image_path = os.path.join(frames_path, image_name)
         with open(image_path, "rb") as f:
             local_file_img_bytes = f.read()
-            image_files.append({
-                "mime_type": "image/jpeg",
-                "data": local_file_img_bytes
-            })
+            # Create proper Part object for google.genai API
+            image_part = types.Part.from_bytes(
+                data=local_file_img_bytes,
+                mime_type="image/jpeg"
+            )
+            image_files.append(image_part)
 
     usage_tokens = total_frame_count * GEMINI_FRAME_TOKENS + GEMINI_SYSTEM_PROMPT_TOKENS + GEMINI_OUTPUT_TOKENS
     usage_cost = usage_tokens * GEMINI_TOKEN_COST
 
     try:
-        # Create the content list with proper format
-        content_parts = [system_instruction]
+        # Create the content list with proper format for google.genai API
+        content_parts = [types.Part.from_text(text=system_instruction)]
         content_parts.extend(image_files)
-        content_parts.append(f"Reel Caption: {reel_caption}")
+        content_parts.append(types.Part.from_text(text=f"Reel Caption: {reel_caption}"))
         
-        response = gemini_client.generate_content(content_parts)
+        # Use the new google.genai API
+        response = gemini_client.models.generate_content(
+            # MODEL NAME IS ALWAYS gemini-2.5-flash-lite <---------------------------------
+            model="gemini-2.5-flash-lite",
+            contents=content_parts
+        )
         end_time = time.time()
         response_time = end_time - start_time
 
         # Check if request was blocked
-        if response.prompt_feedback and response.prompt_feedback.block_reason:
+        if hasattr(response, 'prompt_feedback') and response.prompt_feedback and hasattr(response.prompt_feedback, 'block_reason') and response.prompt_feedback.block_reason:
+            logger.info("request was blocked")
             return 'blocked'
 
         try:
@@ -177,6 +188,8 @@ async def frames_to_search_query_gemini(user_id, gemini_client, reel_caption, lo
             
             # Parse the cleaned JSON
             parsed_response = json.loads(response_text.strip())
+
+            #logger.info(f"parsed response: {parsed_response}")
             
             # Validate the response structure
             if not isinstance(parsed_response, dict):
@@ -187,23 +200,23 @@ async def frames_to_search_query_gemini(user_id, gemini_client, reel_caption, lo
                 if not isinstance(details, dict):
                     raise ValueError(f"Product details for {product_title} is not a dictionary")
                 
-                # Required fields in order: product_brand, product_name, product_model, description, not_allowed
+                # Required fields in order: product_brand, product_title, not_allowed
                 required_fields = ["product_brand", "product_title", "not_allowed"]
                 
                 for field in required_fields:
                     if field not in details:
-                        raise ValueError(f"Missing required field '{field}' for product {product_name}")
+                        raise ValueError(f"Missing required field '{field}' for product {product_title}")
                     
                     # Validate field types
                     if field == "not_allowed":
                         if not isinstance(details[field], bool):
-                            raise ValueError(f"Field '{field}' for product {product_name} must be a boolean")
+                            raise ValueError(f"Field '{field}' for product {product_title} must be a boolean")
                     else:
                         if not isinstance(details[field], str):
-                            raise ValueError(f"Field '{field}' for product {product_name} must be a string")
+                            raise ValueError(f"Field '{field}' for product {product_title} must be a string")
                 
                 # Log extracted brand and product name for debugging
-                logger.info(f"Extracted Product: {details['product_name']} | Brand: {details['product_brand']}")
+                logger.info(f"Extracted Product: {details['product_title']} | Brand: {details['product_brand']}")
 
             return parsed_response
         except json.JSONDecodeError as e:
@@ -214,5 +227,8 @@ async def frames_to_search_query_gemini(user_id, gemini_client, reel_caption, lo
         end_time = time.time()
         response_time = end_time - start_time
         error_message = str(e)
-
+        logger.error(f"Error in frames_to_search_query_gemini: {error_message}")
+        logger.error(f"Exception type: {type(e).__name__}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return None

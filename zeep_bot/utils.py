@@ -19,6 +19,8 @@ import json
 from dotenv import load_dotenv
 import requests
 from get_text import get_text
+from query_to_narration import query_to_narration
+from narration_to_voice import narration_to_voice
 from db import (
     save_query, error_handler,
     clean_temp_variables,
@@ -47,7 +49,8 @@ OPENAI_SYSTEM_PROMPT_TOKENS = 260  # system prompt tokens
 OPENAI_OUTPUT_TOKENS = 50  # output tokens
 
 #------------------------------------* API VERSION *------------------------------------
-API_VERSION = os.getenv("APP_VERSION")
+# Facebook Graph API version - use v24.0 or latest stable version
+API_VERSION = os.getenv("GRAPH_API_VERSION", "v24.0")
 
 #------------------------------------* CLEAN MEMORY *------------------------------------
 async def clean_memory_and_temp_variables(user_id, logger):
@@ -140,14 +143,21 @@ async def save_frames_with_query_id(user_id, query_ids, logger):
 #------------------------------------* PROCESS INSTAGRAM POST *------------------------------------#
 async def process_instagram_post(attachment_url, reel_caption, user_id, client, attachment_type, location, logger):
     #logger.info("now in process_instagram_post")
+    # Import here to avoid circular import
+    from post_to_frames import post_to_frames
+    from frames_to_query import frames_to_search_query_gemini
     try:
         post_to_frames_success = await post_to_frames(attachment_url, user_id, attachment_type, logger)
         if not post_to_frames_success:
             return "error_posting_frames"
 
-        generated_query = await frames_to_query_gemini(user_id, client, reel_caption, logger)
-        if not generated_query:
+        logger.info("post to frame success")
+        # Extract the actual client from the ai_client dict
+        actual_client = client['client'] if isinstance(client, dict) else client
+        generated_response = await frames_to_search_query_gemini(user_id, actual_client, reel_caption, logger)
+        if not generated_response:
             return "error_generating_query"
+        logger.info(f"generated response: {generated_response}")
         
         if generated_response == 'blocked':
             return 'restricted_product_message_sent'
@@ -166,25 +176,28 @@ async def process_instagram_post(attachment_url, reel_caption, user_id, client, 
         generated_response = filtered_response
         #------------------------------------* SAVE QUERY *------------------------------------
         query_ids = []
+        logger.info("now saving query")
 
-        if len(generated_response) == 1 and generated_response.values()[0]['product_brand'] != 'N/A':
+        if len(generated_response) == 1 and list(generated_response.values())[0]['product_brand'] != 'N/A':
             query_id = await save_query(
                 user_id=user_id,
                 product_name=list(generated_response.keys())[0],
-                product_brand=generated_response.values()[0]['product_brand'],
-                product_title=generated_response.values()[0]['product_title'],
+                product_brand=list(generated_response.values())[0]['product_brand'],
+                product_title=list(generated_response.values())[0]['product_title'],
                 feedback=None,
                 logger=logger
             )
-            if await is_saving_training_data():
-                await save_frames_with_query_id(user_id, [query_id], logger)
+            #if await is_saving_training_data():
+            #    await save_frames_with_query_id(user_id, [query_id], logger)
 
-        elif len(generated_response) == 1 and generated_response.values()[0]['product_brand'] == 'N/A':
+        elif len(generated_response) == 1 and list(generated_response.values())[0]['product_brand'] == 'N/A':
+            logger.info("now asking user for product brand")
             return 'ask_user_for_product_brand'
         
         elif len(generated_response) > 1 :
             #------------------------------------* SAVE QUERY *------------------------------------
             for product_name, details in generated_response.items():
+                logger.info(f"now saving query for product: {product_name}")
                 query_id = await save_query(
                     user_id=user_id,
                     product_name=product_name,
@@ -196,8 +209,8 @@ async def process_instagram_post(attachment_url, reel_caption, user_id, client, 
                 if query_id:
                     query_ids.append(query_id)
 
-            if await is_saving_training_data():
-                await save_frames_with_query_id(user_id, query_ids, logger)
+            #if await is_saving_training_data():
+            #    await save_frames_with_query_id(user_id, query_ids, logger)
 
             if len(query_ids) > 1 and all(qid is not None for qid in query_ids):
                 list_product_names = list(generated_response.keys())
@@ -206,21 +219,31 @@ async def process_instagram_post(attachment_url, reel_caption, user_id, client, 
                 return (list_product_names, query_ids, list_product_brands, list_product_titles)
         
         #------------------------------------* DEEP SEARCH *------------------------------------
+        generated_narration = None
+        logger.info("now generating narration")
         if isinstance(generated_response, dict) and generated_response.values():
             product_info = {
                 'product_title': list(generated_response.values())[0]['product_title'],
                 'product_brand': list(generated_response.values())[0]['product_brand']
             }
-            generated_narration = await query_to_narration(product_info, location, logger)
+            generated_narration = query_to_narration(product_info, location, logger)
             if not generated_narration:
                 return 'no_narration_generated'
 
-        for narration_text in generated_narration:
-            voice_success = await narration_to_voice(narration_text, gemini_client, user_id, logger)
-            if not voice_success:
-                return 'no_voice_generated'
+            for narration_text in generated_narration:
+                voice_success = await narration_to_voice(
+                    narration_text=narration_text, 
+                    gemini_client=actual_client, 
+                    user_id=user_id, 
+                    logger=logger
+                )
+                if not voice_success:
+                    return 'no_voice_generated'
 
-        return 'voice_generated'
+            return 'voice_generated'
+        
+        # If no narration was generated, return error
+        return 'no_narration_generated'
 
     except Exception as e:
         await error_handler(
@@ -315,7 +338,7 @@ async def send_follow_postback_message(user_id, logger):
     }
     
     # Get the page name from environment variable or use a default
-    page_name = os.getenv('PAGE_NAME', '@zeebra.ai')
+    page_name = os.getenv('PAGE_NAME', '@zeep.ai')
     
     payload = {
         "recipient": {
@@ -510,8 +533,8 @@ async def send_message_to_user(message, user_id, logger):
                     try:
                         file_path = os.path.join(voices_path, voice_file)
                         
-                        # Upload file to Facebook Messenger API
-                        upload_url = f"https://graph.facebook.com/{API_VERSION}/me/message_attachments"
+                        # Send file directly to Facebook Messenger API
+                        message_url = f"https://graph.facebook.com/{API_VERSION}/me/messages"
                         
                         # Read file as binary
                         async with aiofiles.open(file_path, 'rb') as f:
@@ -527,64 +550,42 @@ async def send_message_to_user(message, user_id, logger):
                         }
                         mime_type = mime_types.get(file_ext, 'audio/mpeg')
                         
-                        # Prepare multipart form data
+                        # Prepare multipart form data for direct upload
                         form_data = aiohttp.FormData()
-                        form_data.add_field('message', json.dumps({
-                            'attachment': {
-                                'type': 'audio',
-                                'payload': {}
-                            }
-                        }))
-                        form_data.add_field('filedata', file_data, filename=voice_file, content_type=mime_type)
-                        
-                        # Upload file
-                        async with session.post(
-                            upload_url, 
-                            data=form_data, 
-                            params={'access_token': access_token}
-                        ) as upload_response:
-                            if upload_response.status != 200:
-                                response_text = await upload_response.text()
-                                logger.error(f"Failed to upload voice file {voice_file}: {upload_response.status}, Response: {response_text}")
-                                continue
-                            
-                            upload_result = await upload_response.json()
-                            attachment_id = upload_result.get('attachment_id')
-                            
-                            if not attachment_id:
-                                logger.error(f"No attachment_id returned for {voice_file}")
-                                continue
-                            
-                            # Send message with attachment
-                            message_url = f"https://graph.facebook.com/{API_VERSION}/me/messages"
-                            message_payload = {
-                                "recipient": {"id": user_id},
-                                "message": {
-                                    "attachment": {
-                                        "type": "audio",
-                                        "payload": {
-                                            "attachment_id": attachment_id
-                                        }
+                        form_data.add_field(
+                            'recipient',
+                            json.dumps({"id": user_id})
+                        )
+                        form_data.add_field(
+                            'message',
+                            json.dumps({
+                                'attachment': {
+                                    'type': 'audio',
+                                    'payload': {
+                                        'is_reusable': False
                                     }
                                 }
-                            }
-                            
-                            message_headers = {
-                                "Content-Type": "application/json"
-                            }
-                            
-                            async with session.post(
-                                message_url, 
-                                json=message_payload, 
-                                headers=message_headers,
-                                params={'access_token': access_token}
-                            ) as message_response:
-                                if message_response.status == 200:
-                                    logger.info(f"Successfully sent voice file: {voice_file}")
-                                    success_count += 1
-                                else:
-                                    response_text = await message_response.text()
-                                    logger.error(f"Failed to send voice file {voice_file}: {message_response.status}, Response: {response_text}")
+                            })
+                        )
+                        form_data.add_field(
+                            'filedata',
+                            file_data,
+                            filename=voice_file,
+                            content_type=mime_type
+                        )
+                        
+                        # Send file directly
+                        async with session.post(
+                            message_url, 
+                            data=form_data, 
+                            params={'access_token': access_token}
+                        ) as message_response:
+                            if message_response.status == 200:
+                                logger.info(f"Successfully sent voice file: {voice_file}")
+                                success_count += 1
+                            else:
+                                response_text = await message_response.text()
+                                logger.error(f"Failed to send voice file {voice_file}: {message_response.status}, Response: {response_text}")
                     
                     except Exception as e:
                         logger.error(f"Error sending voice file {voice_file}: {str(e)}")
@@ -744,7 +745,7 @@ async def verify_webhook_call(request: Request, logger):
         signature = signature_header.split('=')[1]
         
         # Step 3: Get the Facebook app secret from environment variables
-        app_secret = os.getenv('APP_SECRET')
+        app_secret = os.getenv('FACEBOOK_APP_SECRET')
 
         if not app_secret:
             await error_handler(
@@ -828,7 +829,7 @@ async def process_message_with_gemini(
     
     Args:
         message: The user's message
-        gemini_client: The Gemini client instance from zeebra_main
+        gemini_client: The Gemini client instance from zeep_main
         logger: Logger instance
     
     Returns:
@@ -839,15 +840,8 @@ async def process_message_with_gemini(
             * product_brand: Product brand for narration generation step
     """
     try:
-
-        # Create chat history for Gemini (map roles correctly: assistant -> model, user -> user)
-        gemini_history = []
-
-        
-        chat = gemini_client.start_chat(history=gemini_history)
-        
-        # Add conversation history dict to the prompt for Gemini
-        response = chat.send_message(f"""
+        # Use the new google.genai API
+        prompt = f"""
         Analyze the user's message to determine the appropriate response.
 
         Here is the user's message:
@@ -877,11 +871,17 @@ async def process_message_with_gemini(
             "message_type": "product_brand",
             "response": "Samsung Galaxy Buds 2 Pro",
         }}
-        """)
+        """
+        
+        # Use generate_content instead of start_chat for the new google.genai API
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=prompt
+        )
 
         # Parse response with better error handling
         try:
-            response_text = response.text.strip()
+            response_text = response.text.strip() if hasattr(response, 'text') else response.candidates[0].content.parts[0].text.strip()
             if not response_text:
                 raise ValueError("Empty response from Gemini")
 
@@ -974,12 +974,17 @@ async def main_brain_message_processor(user_id, user_message, ai_client, locatio
                         'product_title': product_name,
                         'product_brand': product_brand
                     }
-                    generated_narration = await query_to_narration(product_info, location, logger)
+                    generated_narration = query_to_narration(product_info, location, logger)
                     if not generated_narration:
                         return False
 
                     for narration_text in generated_narration:
-                        voice_success = await narration_to_voice(narration_text, ai_client['client'], user_id, logger)
+                        voice_success = await narration_to_voice(
+                            narration_text=narration_text, 
+                            gemini_client=ai_client['client'], 
+                            user_id=user_id, 
+                            logger=logger
+                        )
                         if not voice_success:
                             return False
                         
