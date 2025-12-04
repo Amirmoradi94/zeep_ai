@@ -4,6 +4,7 @@ import time
 import re
 import base64
 from pathlib import Path
+from logging import Logger
 from google.genai import types
 
 #------------------------------------* FRAMES TO SEARCH QUERY GEMINI *------------------------------------
@@ -16,7 +17,7 @@ GEMINI_SYSTEM_PROMPT_TOKENS = 260  # system prompt tokens
 GEMINI_OUTPUT_TOKENS = 50  # output tokens
 
 
-async def frames_to_search_query_gemini(user_id, gemini_client, reel_caption, logger):
+async def frames_to_search_query_gemini(user_id, gemini_client, reel_caption, logger: Logger):
     logger.info("now in frames_to_search_query_gemini")
     frames_path = f"{FRAMES_PATH}/{user_id}/"
     image_files = []

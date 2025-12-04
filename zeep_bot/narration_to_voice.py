@@ -2,6 +2,8 @@ import base64
 import mimetypes
 import os
 import re
+import random
+import shutil
 import struct
 from google import genai
 from google.genai import types
@@ -16,6 +18,16 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 #------------------------------------* CONSTANTS *------------------------------------
 VOICES_PATH = "./voices"
+
+# Available speaker names for random selection
+AVAILABLE_SPEAKERS = [
+    "Zephyr", "Puck", "Charon", "Kore", "Fenrir",
+    "Leda", "Orus", "Aoede", "Callirrhoe", "Autonoe",
+    "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina",
+    "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
+    "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird",
+    "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
+]
 
 
 #------------------------------------* HELPER FUNCTIONS *------------------------------------
@@ -105,11 +117,11 @@ async def parse_audio_mime_type(mime_type: str) -> dict:
 async def narration_to_voice(
     narration_text: str,
     gemini_client,
+    logger: Logger,
     output_filename: str = None,
     user_id: int = None,
-    voice_name: str = "Algieba",
-    temperature: float = 0.15,
-    logger: Logger = None
+    voice_name: str = None,
+    temperature: float = 0.15
 ):
     """
     Convert narration text to voice using Gemini TTS API.
@@ -119,37 +131,43 @@ async def narration_to_voice(
         gemini_client: Gemini client instance (genai.Client)
         output_filename (str, optional): Custom output filename (without extension)
         user_id (int, optional): User ID for organizing files
-        voice_name (str): Voice to use (default: "Algieba")
+        voice_name (str, optional): Voice to use. If None, a random voice will be selected
         temperature (float): Temperature for generation (default: 0.15)
-        logger (Logger, optional): Logger instance
+        logger (Logger): Logger instance
     
     Returns:
         bool: True if successful, False otherwise
     """
     try:
-        if logger:
-            logger.info(f"Starting voice generation for text length: {len(narration_text)}")
-        else:
-            print(f"🎤 Starting voice generation for text length: {len(narration_text)}")
+        logger.info(f"Starting voice generation for text length: {len(narration_text)}")
         
         # Validate input
         if not narration_text or not narration_text.strip():
             error_msg = "Narration text is empty"
-            if logger:
-                logger.error(error_msg)
+            logger.error(error_msg)
             return False
         
         if not gemini_client:
             error_msg = "Gemini client is required"
-            if logger:
-                logger.error(error_msg)
+            logger.error(error_msg)
             return False
+        
+        # Select random voice if not specified
+        if voice_name is None:
+            voice_name = random.choice(AVAILABLE_SPEAKERS)
+            logger.info(f"Randomly selected voice: {voice_name}")
+
         
         # Create voices directory
         if user_id:
             voices_dir = f"{VOICES_PATH}/{user_id}/"
         else:
             voices_dir = f"{VOICES_PATH}/"
+        
+        # Clean up existing voices for this user
+        if os.path.exists(voices_dir):
+            logger.info(f"Cleaning up existing voices directory: {voices_dir}")
+            shutil.rmtree(voices_dir)
         
         os.makedirs(voices_dir, exist_ok=True)
         
@@ -162,13 +180,14 @@ async def narration_to_voice(
         # Remove extension if provided
         output_filename = output_filename.replace('.wav', '').replace('.mp3', '')
         
-        # Prepare content
+        # Prepare content with speaking style instruction
+        styled_text = f"[Speak quickly and energetically] {narration_text}"
         model = "gemini-2.5-flash-preview-tts"
         contents = [
             types.Content(
                 role="user",
                 parts=[
-                    types.Part.from_text(text=narration_text),
+                    types.Part.from_text(text=styled_text),
                 ],
             ),
         ]
@@ -186,10 +205,7 @@ async def narration_to_voice(
             ),
         )
         
-        if logger:
-            logger.info(f"Generating audio with voice: {voice_name}")
-        else:
-            print(f"🎵 Generating audio with voice: {voice_name}")
+        logger.info(f"Generating audio with voice: {voice_name}")
         
         # Generate audio
         file_index = 0
@@ -227,10 +243,7 @@ async def narration_to_voice(
                 file_index += 1
             else:
                 if chunk.text:
-                    if logger:
-                        logger.info(f"Chunk text: {chunk.text}")
-                    else:
-                        print(chunk.text)
+                    logger.info(f"Chunk text: {chunk.text}")
         
         # Return result
         if generated_files:
@@ -238,84 +251,17 @@ async def narration_to_voice(
             file_size = os.path.getsize(main_file)
             
             success_msg = f"Successfully generated {len(generated_files)} audio file(s)"
-            if logger:
-                logger.info(success_msg)
-                logger.info(f"Main file: {main_file} ({file_size} bytes)")
-            else:
-                print(f"✅ {success_msg}")
-                print(f"📁 Main file: {main_file} ({file_size} bytes)")
+            logger.info(success_msg)
+            logger.info(f"Main file: {main_file} ({file_size} bytes)")
             
             return True
         else:
             error_msg = "No audio files were generated"
-            if logger:
-                logger.error(error_msg)
+            logger.error(error_msg)
             return False
     
     except Exception as e:
         error_msg = f"Error generating voice: {str(e)}"
-        if logger:
-            logger.error(error_msg)
-        else:
-            print(f"❌ {error_msg}")
+        logger.error(error_msg)
         
         return False
-
-
-# ================================================================================================
-# EXAMPLE USAGE
-# ================================================================================================
-
-if __name__ == "__main__":
-    """
-    Example demonstrating how to use narration_to_voice function.
-    This example shows:
-    1. Converting a single narration text to voice
-    2. Converting multiple text parts (split narrations) to separate voice files
-    3. Handling file paths and cleanup
-    """
-    
-    
-    # Example 2: Multiple narration parts (split text)
-    print("\n\n" + "=" * 80)
-    print("🎤 Example 2: Multiple Voice Messages (Split Narration)")
-    print("=" * 80)
-    
-    narration_parts = [
-        """به نظر میرسه که سامسونگ گلکسی بادز 2 پرو (Samsung Galaxy Buds 2 Pro) گلکسی بادز ۲ پرو یکی از هدفون‌های بی‌سیم رده‌بالای سامسونگه که الان با قیمت حدود ۵ تا ۶ میلیون تومن توی بازار ایران پیدا می‌شه.. نکته‌های خوبش اینه که کیفیت صدای فوق‌العاده با بیس قوی، نویز کنسلینگ خیلی مؤثر مخصوصاً توی محیط‌های شلوغ، طراحی سبک و آرگونومیک که راحت توی گوش قرار می‌گیره. خیلی خب، توضیحاتم رو توی ویس بعدی ادامه میدم""",
-        
-        """البته عمر باتری هر گوشی نسبتاً کمه و برای بعضیا قیمتش نسبت به امکاناتش بالاست. رقیباش هم مدل هایی مثل Sony WF-1000XM5، Apple AirPods Pro 2 و Nothing Ear (2) هستن. در مقایسه با اون‌ها، نسبت ت به WF-1000XM5 که حدود ۸ تا ۹ میلیون تومنه و ایرپادز پرو ۲ که بالای ۱۰ میلیون تومنه، گلکسی بادز ۲ پرو ارزون‌تره ولی عمر باتریش نسبت به اون‌ها کوتاه‌تره.. اگه دنبال یه هدفون جمع‌وجور با صدای خیلی خوب و حذف نویز قوی هستی و باتری خیلی برات مهم نیست، واقعاً گزینه ارزشمندیه.."""
-    ]
-    
-    print(f"\n📝 Converting {len(narration_parts)} text parts to separate voice files...")
-    
-    # Convert each part to voice
-    all_success = True
-    for i, part in enumerate(narration_parts, 1):
-        print(f"\n--- Processing Part {i} ---")
-        print(f"Text length: {len(part)} characters")
-        print(f"Preview: {part[:80]}...")
-        
-        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-        
-        success = narration_to_voice(
-            narration_text=part,
-            gemini_client=gemini_client,
-            output_filename=f"galaxy_buds_review_part{i}",
-            user_id=1234567890
-        )
-        
-        if success:
-            print(f"✅ Part {i} voice generated: galaxy_buds_review_part{i}.mp3")
-        else:
-            print(f"❌ Failed to generate Part {i}")
-            all_success = False
-    
-    if all_success:
-        print("\n" + "=" * 80)
-        print("✅ All voice messages generated successfully!")
-        print("=" * 80)
-        print("\n📁 Generated files:")
-        for i in range(1, len(narration_parts) + 1):
-            print(f"   - output_voices/galaxy_buds_review_part{i}.mp3")
-

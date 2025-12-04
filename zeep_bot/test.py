@@ -3,6 +3,8 @@ from pathlib import Path
 import openai
 import os
 import requests
+import logging
+import asyncio
 from dotenv import load_dotenv
 from perplexity import Perplexity
 from google import genai
@@ -11,6 +13,14 @@ from google import genai
 from query_to_narration import query_to_narration
 from narration_to_voice import narration_to_voice
 
+# Setup logger for test file
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    logger.addHandler(handler)
+
 # Load environment variables
 load_dotenv()
 
@@ -18,7 +28,7 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 
-def generate_voice_from_product_name(product_name: str, location: str = "Iran", user_id: int = None):
+async def generate_voice_from_product_name(product_name: str, location: str = "Iran", user_id: int = None):
     """
     Complete pipeline: Generate voice review from product name.
     
@@ -101,9 +111,10 @@ def generate_voice_from_product_name(product_name: str, location: str = "Iran", 
             #print(f"      Text preview: {narration_text[:80]}...")
             
             # Convert to voice
-            success = narration_to_voice(
+            success = await narration_to_voice(
                 narration_text=narration_text,
                 gemini_client=gemini_client,
+                logger=logger,
                 output_filename=output_filename,
                 user_id=user_id,
                 voice_name="Algieba",  # Default Farsi voice
@@ -158,42 +169,45 @@ if __name__ == "__main__":
     Example demonstrating the complete workflow from product name to voice files.
     """
     
-    print("\n" + "=" * 80)
-    print("EXAMPLE: Complete Product Review Voice Generation")
-    print("=" * 80)
+    async def main():
+        print("\n" + "=" * 80)
+        print("EXAMPLE: Complete Product Review Voice Generation")
+        print("=" * 80)
+        
+        # Example 1: Generate voice for Samsung Galaxy Buds Pro 2 in Iranian market
+        print("\n📱 Example 1: Samsung Galaxy Buds Pro 2")
+        print("-" * 80)
+        
+        voice_files = await generate_voice_from_product_name(
+            product_name="Samsung Galaxy Buds Pro 2",
+            location="Iran",
+            user_id=123456
+        )
+        
+        if voice_files:
+            print("\n✅ Success! Voice files are ready.")
+        else:
+            print("\n❌ Failed to generate voice files.")
+        
+        
+        # Example 2: Generate voice for different product in Iranian market
+        print("\n\n📱 Example 2: Dyson Airwrap Multi-styler and Dryer Straight+Wavy in Ceramic Pink")
+        print("-" * 80)
+        
+        voice_files_iran = await generate_voice_from_product_name(
+            product_name="Dyson Airwrap Multi-styler and Dryer Straight+Wavy in Ceramic Pink",
+            location="Iran",
+            user_id=123456
+        )
+        
+        if voice_files_iran:
+            print("\n✅ Success! Voice files are ready.")
+        
+        print("\n" + "=" * 80)
+        print("✅ Examples complete!")
+        print("=" * 80)
     
-    # Example 1: Generate voice for Samsung Galaxy Buds Pro 2 in Iranian market
-    print("\n📱 Example 1: Samsung Galaxy Buds Pro 2")
-    print("-" * 80)
-    
-    voice_files = generate_voice_from_product_name(
-        product_name="Samsung Galaxy Buds Pro 2",
-        location="Iran",
-        user_id=123456
-    )
-    
-    if voice_files:
-        print("\n✅ Success! Voice files are ready.")
-    else:
-        print("\n❌ Failed to generate voice files.")
-    
-    
-    # Example 2: Generate voice for different product in Iranian market
-    print("\n\n📱 Example 2: Dyson Airwrap Multi-styler and Dryer Straight+Wavy in Ceramic Pink")
-    print("-" * 80)
-    
-    voice_files_iran = generate_voice_from_product_name(
-        product_name="Dyson Airwrap Multi-styler and Dryer Straight+Wavy in Ceramic Pink",
-        location="Iran",
-        user_id=123456
-    )
-    
-    if voice_files_iran:
-        print("\n✅ Success! Voice files are ready.")
-    
-    print("\n" + "=" * 80)
-    print("✅ Examples complete!")
-    print("=" * 80)
+    asyncio.run(main())
 
 
 

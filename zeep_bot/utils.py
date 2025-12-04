@@ -230,12 +230,16 @@ async def process_instagram_post(attachment_url, reel_caption, user_id, client, 
             if not generated_narration:
                 return 'no_narration_generated'
 
+            # Send message to user that research is done and voice is being generated
+            research_complete_message = "تحقیقم رو انجام دادم و الان برات پیام صوتی می‌فرستم 🎤"
+            await send_message_to_user(research_complete_message, user_id, logger)
+
             for narration_text in generated_narration:
                 voice_success = await narration_to_voice(
                     narration_text=narration_text, 
-                    gemini_client=actual_client, 
-                    user_id=user_id, 
-                    logger=logger
+                    gemini_client=actual_client,
+                    logger=logger,
+                    user_id=user_id
                 )
                 if not voice_success:
                     return 'no_voice_generated'
@@ -978,12 +982,16 @@ async def main_brain_message_processor(user_id, user_message, ai_client, locatio
                     if not generated_narration:
                         return False
 
+                    # Send message to user that research is done and voice is being generated
+                    research_complete_message = "تحقیقم رو انجام دادم و الان برات پیام صوتی می‌فرستم 🎤"
+                    await send_message_to_user(research_complete_message, user_id, logger)
+
                     for narration_text in generated_narration:
                         voice_success = await narration_to_voice(
                             narration_text=narration_text, 
-                            gemini_client=ai_client['client'], 
-                            user_id=user_id, 
-                            logger=logger
+                            gemini_client=ai_client['client'],
+                            logger=logger,
+                            user_id=user_id
                         )
                         if not voice_success:
                             return False

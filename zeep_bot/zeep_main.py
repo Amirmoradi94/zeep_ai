@@ -347,12 +347,16 @@ async def handle_webhook_post(request: Request):
                 await send_message_to_user(no_narration_generated_text, user_id, logger)
                 return {"status": "no_narration_generated"}
 
+            # Send message to user that research is done and voice is being generated
+            research_complete_message = "تحقیقم رو انجام دادم و الان بهت ویس میدم 🎤"
+            await send_message_to_user(research_complete_message, user_id, logger)
+
             for narration_text in generated_narration:
                 voice_success = await narration_to_voice(
                     narration_text=narration_text, 
-                    gemini_client=ai_client['client'], 
-                    user_id=user_id, 
-                    logger=logger
+                    gemini_client=ai_client['client'],
+                    logger=logger,
+                    user_id=user_id
                 )
                 if not voice_success:
                     await send_message_to_user(no_voice_generated_text, user_id, logger)
