@@ -34,14 +34,27 @@ def format_narration_with_template(research_data: dict, logger: Logger) -> str:
     Returns:
         str: Formatted narration text
     """
-
-    #------------------------------------* NARRATION TEMPLATE *------------------------------------
-    NARRATION_TEMPLATE = """
-    خب ببین، {short_name} {intro_statement}.
+    try:
+        short_name = research_data.get('short_name', 'این محصول')
+        intro_statement = research_data.get('intro_statement', 'یکی از محصولات خوب بازاره')
+        positive_features = research_data.get('positive_features', 'ویژگی‌های خوبی داره')
+        negative_aspects = research_data.get('negative_aspects', 'یه سری نکات منفی هم داره')
+        users_feedback = research_data.get('users_feedback', 'کاربرا نظرات مختلفی دارن')
+        competitors = research_data.get('competitors', 'محصولات مشابه')
+        comparison = research_data.get('comparison', 'در سطح مناسبیه')
+        recommendation = research_data.get('recommendation', 'می‌تونی بررسی کنی')
+        
+        #------------------------------------* NARRATION TEMPLATE *------------------------------------
+        NARRATION_TEMPLATE = f"""
+    خب امروز میخوایم {short_name} بررسی کنیم. {intro_statement}.
 
     نکته‌های خوبش اینه که {positive_features}.
 
     البته {negative_aspects}.
+
+    [SPLIT_HERE]
+
+    {users_feedback}.
 
     رقیباش هم مدل هایی مثل {competitors} هستن.
 
@@ -49,17 +62,8 @@ def format_narration_with_template(research_data: dict, logger: Logger) -> str:
 
     {recommendation}.
     """
-    try:
-        narration = NARRATION_TEMPLATE.format(
-            short_name=research_data.get('short_name', 'این محصول'),
-            intro_statement=research_data.get('intro_statement', 'یکی از محصولات خوب بازاره'),
-            positive_features=research_data.get('positive_features', 'ویژگی‌های خوبی داره'),
-            negative_aspects=research_data.get('negative_aspects', 'یه سری نکات منفی هم داره'),
-            competitors=research_data.get('competitors', 'محصولات مشابه'),
-            comparison=research_data.get('comparison', 'در سطح مناسبیه'),
-            recommendation=research_data.get('recommendation', 'می‌تونی بررسی کنی')
-        )
-        return narration.strip()
+        
+        return NARRATION_TEMPLATE.strip()
     except Exception as e:
         logger.error(f"Error formatting narration: {e}")
         return None
@@ -68,8 +72,9 @@ def format_narration_with_template(research_data: dict, logger: Logger) -> str:
 # ============================== SPLIT LONG NARRATION ==============================
 def split_long_narration(narration_text: str, logger: Logger) -> list[str]:
     """
-    Split long narration text into multiple parts if it exceeds 60 seconds of voice.
-    Ensures parts are roughly equal in length to avoid short trailing segments.
+    Split long narration text into second parts based on content structure.
+    First part: intro, positive features, negative aspects
+    Second part: user feedback, competitors, comparison, recommendation
     Cleans up text by removing extra spaces, fixing punctuation, and removing duplicate words.
     Adds natural transition phrases between parts.
     
@@ -82,29 +87,110 @@ def split_long_narration(narration_text: str, logger: Logger) -> list[str]:
     """
     # Estimate: ~3 words per second in Farsi, average 5 chars per word + spaces
     # 60 seconds ≈ 180 words ≈ 900 characters (being conservative with 900)
-    MAX_CHARS_PER_PART = 1000
-    MIN_CHARS_FOR_LAST_PART = 200  # Minimum 15 seconds for last part
+    MAX_CHARS_PER_PART = 500
     
     try:
+        # Check if there's a split marker in the template
+        if "[SPLIT_HERE]" in narration_text:
+            logger.info("Found split marker, splitting narration into structured parts...")
+            
+            # Split by marker
+            parts = narration_text.split("[SPLIT_HERE]")
+            part1 = parts[0].strip()
+            part2 = parts[1].strip() if len(parts) > 1 else ""
+            
+            # Use OpenAI to clean up the text and add transition
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            
+            cleanup_prompt = f"""You are a professional text editor for voice messages in Farsi. Your task is to CLEAN UP two parts of a product review and add a proper transition.
+
+                        TEXT CLEANUP RULES (VERY IMPORTANT):
+                        1. Remove EXTRA SPACES between words (multiple spaces → single space)
+                        2. Fix punctuation marks (commas, dots, etc.):
+                           - Remove excessive punctuation (e.g., ".." → ".")
+                           - Add missing commas where needed for natural flow
+                           - Remove unnecessary punctuation
+                        3. Remove DUPLICATE WORDS (e.g., "خوب خوب" → "خوب")
+                        4. Fix spacing around punctuation marks according to Farsi rules
+                        5. Ensure proper sentence structure and flow
+                        6. Keep the conversational Farsi tone natural and friendly
+
+                        PART 1 (Intro, positive features, negative aspects):
+                        {part1}
+
+                        PART 2 (User feedback, competitors, comparison, recommendation):
+                        {part2}
+
+                        INSTRUCTIONS:
+                        1. Clean up Part 1 and add a casual transition phrase at the end
+                        2. For Part 2, start with a phrase like "خب بررسی خودمون رو با [FEATURE] ادامه میدیم" where [FEATURE] should be something relevant from Part 2 (like "بازخورد کاربرا" for user feedback section)
+                        3. Then clean up the rest of Part 2
+
+                        SUGGESTED TRANSITION PHRASES FOR PART 1 END:
+                        - "خیلی خب، توضیحاتمو توی ویس بعدی ادامه میدم"
+                        - "بقیه نکات رو توی ویس بعدی واست میگم"
+                        - "صبر کن، ادامشو توی پیام بعدی میگم"
+
+                        SUGGESTED START PHRASES FOR PART 2:
+                        - "خب بررسی خودمون رو با بازخورد کاربرا ادامه میدیم"
+                        - "خب بیا ببینیم کاربرا چی میگن"
+                        - "خب الان نظر کاربرا رو بررسی می‌کنیم"
+
+                        Return ONLY a JSON array with EXACTLY 2 CLEANED text parts:
+                        ["cleaned part 1 with transition...", "cleaned part 2 with intro phrase..."]
+
+                        Return ONLY the JSON array, no other text."""
+
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a professional Farsi text editor that cleans up text and adds natural transitions for voice messages. You fix grammar, remove extra spaces, correct punctuation, and remove duplicate words while maintaining natural conversational flow."
+                    },
+                    {
+                        "role": "user",
+                        "content": cleanup_prompt
+                    }
+                ]
+            )
+            
+            # Parse the response
+            import json
+            response_text = response.choices[0].message.content.strip()
+            
+            # Clean up response if it contains markdown code blocks
+            if response_text.startswith('```'):
+                content = response_text.split('```')[1]
+                if content.startswith('json'):
+                    content = content[4:]
+                response_text = content.strip()
+            
+            # Parse JSON array
+            text_parts = json.loads(response_text)
+            
+            if not isinstance(text_parts, list) or len(text_parts) != 2:
+                logger.error(f"Failed to split narration properly: {response_text}")
+                return [narration_text.replace("[SPLIT_HERE]", "").strip()]
+            
+            logger.info(f"Split narration into {len(text_parts)} structured parts")
+            for i, part in enumerate(text_parts, 1):
+                logger.info(f"Part {i} length: {len(part)} chars (~{len(part) // 15} seconds)")
+            
+            return text_parts
+        
+        # If no split marker, check if text is short enough
         text_length = len(narration_text)
         
-        # If text is short enough, return as single part
         if text_length <= MAX_CHARS_PER_PART:
             logger.info(f"Text length ({text_length} chars) is within 60 seconds limit")
             return [narration_text]
         
+        # If text is long but no split marker (legacy support), fall back to generic split
+        logger.warning("Text is long but no split marker found, using generic split...")
+        
         # Calculate optimal number of parts for equal distribution
-        # If remainder would be too short, split into more equal parts
-        num_parts = text_length // MAX_CHARS_PER_PART
-        remainder = text_length % MAX_CHARS_PER_PART
-        
-        # If remainder is too short, increase number of parts for better distribution
-        if remainder > 0 and remainder < MIN_CHARS_FOR_LAST_PART:
-            num_parts += 1
-        elif remainder >= MIN_CHARS_FOR_LAST_PART:
-            num_parts += 1
-        
-        # Calculate target length per part for equal distribution
+        num_parts = (text_length // MAX_CHARS_PER_PART) + (1 if text_length % MAX_CHARS_PER_PART > 0 else 0)
         target_chars_per_part = text_length // num_parts
         
         logger.info(f"Text is long ({text_length} chars), splitting into {num_parts} equal parts...")
@@ -149,12 +235,12 @@ def split_long_narration(narration_text: str, logger: Logger) -> list[str]:
                     Make sure each part has proper grammar, no extra spaces, correct punctuation, and no duplicate words.
 
                     Example format:
-                    ["part 1 cleaned text... خیلی خب، ادامه توضیحاتم رو توی ویس بعدی ادامه میدم", "part 2 cleaned text... بقیه نکات رو توی ویس بعدی براتون میگم", "final part cleaned text"]
+                    ["part 1 cleaned text... خیلی خب، توضیحاتم رو توی ویس بعدی ادامه میدم", "part 2 cleaned text... بقیه نکات رو توی ویس بعدی واست میگم", "final part cleaned text"]
 
                     Return ONLY the JSON array, no other text."""
 
         response = client.chat.completions.create(
-            model="gpt-5-nano",
+            model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
@@ -193,7 +279,7 @@ def split_long_narration(narration_text: str, logger: Logger) -> list[str]:
         
     except Exception as e:
         logger.error(f"Failed to split narration: {e}")
-        return [narration_text]
+        return [narration_text.replace("[SPLIT_HERE]", "").strip() if "[SPLIT_HERE]" in narration_text else narration_text]
 
 
 # ============================== QUERY TO NARRATION ==============================
@@ -209,18 +295,18 @@ def query_to_narration(product_info: dict, location: str, logger: Logger):
         list: List of narration text parts (split if longer than 60 seconds) or None if error
     """
     try:
-        product_title = product_info.get('product_title')
-        product_brand = product_info.get('product_brand')
+        #product_title = product_info.get('product_title')
+        #product_brand = product_info.get('product_brand')
         
         # Structured system prompt that returns JSON data for template
         # Determine price search sources based on location
-        price_sources = ""
-        if location.lower() in ['iran', 'ایران', 'tehran', 'تهران']:
-            price_sources = "Iranian e-commerce websites (Digikala, Torob, etc.)"
-        else:
-            price_sources = f"{location} market retailers and e-commerce platforms"
+        #price_sources = ""
+        #if location.lower() in ['iran', 'ایران', 'tehran', 'تهران']:
+        #    price_sources = "Iranian e-commerce websites (Digikala, Torob, etc.)"
+        #else:
+        #    price_sources = f"{location} market retailers and e-commerce platforms"
         
-        system_prompt = f"""You are a friendly and knowledgeable product advisor who talks like a close friend. Your task is to research a product and provide structured data in VERY CASUAL, FRIENDLY Farsi for a narration template.
+        system_prompt = f"""You are a friendly and knowledgeable product advisor who talks like a close friend. Your task is to research a product and create TWO separate voice narrations in VERY CASUAL, FRIENDLY Farsi each 500 characters.
 
                         ⚠️ CRITICAL: Use ONLY informal/colloquial Farsi verbs (داره, نداره, می‌کنه, میشه, می‌تونه) - NEVER formal verbs (دارد, ندارد, می‌کند, می‌شود, می‌تواند)
 
@@ -237,87 +323,72 @@ def query_to_narration(product_info: dict, location: str, logger: Logger):
 
                         RESPONSE FORMAT - Return ONLY a JSON object with these exact keys:
                         {{
-                            "product_title": "نام کامل محصول",
-                            "short_name": "نام کوتاه و دوستانه محصول (مثل 'گلکسی بادز' برای 'Samsung Galaxy Buds Pro 2')",
-                            "intro_statement": "یک جمله معرفی کوتاه و دوستانه",
-                            "positive_features": "ویژگی مثبت اول، ویژگی مثبت دوم، و ویژگی مثبت سوم",
-                            "competitors": "رقیب اول، رقیب دوم، و رقیب سوم",
-                            "comparison": "مقایسه با رقیب اول، مقایسه با رقیب دوم، و مقایسه با رقیب سوم",
-                            "negative_aspects": "نقطه ضعف اول، نقطه ضعف دوم، و نقطه ضعف سوم",
-                            "users_feedback": "بازخورد کاربران از محصول (مثلاً که باتریش کمه ولی راحت توی گوش قرار میگیره. یا که واقعاً راضین)",
-                            "recommendation": "توصیه نهایی در مورد اینکه ارزش خرید داره یا نه"
+                            "narration_part_1": "First voice narration - complete text ready for voice",
+                            "narration_part_2": "Second voice narration - complete text ready for voice"
                         }}
 
-                        CONTENT GUIDELINES:
+                        NARRATION STRUCTURE:
 
-                        1. short_name:
-                        - Create a SHORT, FRIENDLY name for the product (2-4 words max)
-                        - Use casual, easy-to-say names that people actually use
-                        - Examples: "Samsung Galaxy Buds Pro 2" → "گلکسی بادز"
-                        - Examples: "iPhone 15 Pro" → "آیفون ۱۵ پرو"
-                        - Examples: "Dyson Airwrap Multi-styler" → "دایسون ایررپ"
-                        - Use Persian transliteration when appropriate
-                        - Keep it conversational and natural
+                        📝 NARRATION PART 1 (First Voice) - MUST CONTAIN EXACTLY:
+                        1. INTRO_STATEMENT: Brief introduction with product short name (e.g., "خب امروز میخوایم گلکسی بادز بررسی کنیم. یکی از محبوب‌ترین هدفون‌های بی‌سیمه")
+                        2. POSITIVE_FEATURES: 3 specific positive features in casual language (e.g., "نکته‌های خوبش اینه که کیفیت صداش واقعاً عالیه، باتریش خیلی خوبه، و قیمتش هم مناسبه")
+                        3. NEGATIVE_ASPECTS: 2-3 weaknesses honestly but casually (e.g., "البته یه کم سنگینه و گاهی واقعاً گرم میشه")
+                        4. TRANSITION PHRASE: End with casual transition (e.g., "خیلی خب، توضیحاتمو توی ویس بعدی ادامه میدم")
 
-                        2. intro_statement: 
-                        - One VERY CASUAL, friendly sentence about the product
-                        - Use casual expressions: "خب", "ببین", "واقعاً", "اصلاً"
-                        - Examples: "خب بریم سراغ بررسی یکی از هدفون های پرتقاضای بازار
+                        Example Part 1 structure:
+                        "خب امروز میخوایم [SHORT_NAME] بررسی کنیم. [INTRO_STATEMENT].
+                        
+                        نکته‌های خوبش اینه که [POSITIVE_FEATURES].
+                        
+                        البته [NEGATIVE_ASPECTS].
+                        
+                        خیلی خب، توضیحاتمو توی ویس بعدی ادامه میدم"
 
-                        2. positive_features:
-                        - List 3 specific positive features separated by "،"
-                        - Use VERY CASUAL, enthusiastic language
-                        - Base features on REAL user feedback and reviews from the internet
-                        - Use expressions like: "واقعاً عالیه", "خیلی خوبه", "باورم نمیشه"
-                        - Example: "باتریش واقعاً عالیه، کیفیت ساختش خیلی خوبه، و قیمتش هم مناسبه"
+                        📝 NARRATION PART 2 (Second Voice) - MUST CONTAIN EXACTLY:
+                        1. START PHRASE: "خب بررسی خودمون رو با بازخورد کاربرا ادامه میدیم" or "خب بیا ببینیم کاربرا چی میگن"
+                        2. USER_FEEDBACK: Real user feedback from internet research (e.g., "بر اساس نظراتی که دیدم، کاربرا میگن که واقعاً راحته و کیفیت ساختش عالیه")
+                        3. COMPETITORS: Name 3 real competitor products (e.g., "رقیباش هم مدل هایی مثل Apple AirPods Pro، Sony WF-1000XM4، و Jabra Elite 85t هستن")
+                        4. COMPARISON: Compare with competitors (e.g., "در مقایسه با اون‌ها، باتریش بهتره ولی قیمتش یه کم بیشتره")
+                        5. RECOMMENDATION: Final casual recommendation (e.g., "من که می‌تونم بگم اگه بودجه‌ت بهش برسه، واقعاً ارزش خرید داره")
 
-                        3. negative_aspects:
-                        - List 2 concerns or weaknesses with "و" between them
-                        - Be honest but constructive in a casual way
-                        - Base on REAL user complaints and negative feedback from actual reviews
-                        - Use casual expressions: "یه کم", "گاهی", "اصلاً", "واقعاً"
-                        - Example: "یه کم سنگینه و گاهی واقعاً گرم میشه"
+                        Example Part 2 structure:
+                        "خب بررسی خودمون رو با بازخورد کاربرا ادامه میدیم. [USER_FEEDBACK].
+                        
+                        رقیباش هم مدل هایی مثل [COMPETITORS] هستن.
+                        
+                        در مقایسه با اون‌ها، [COMPARISON].
+                        
+                        [RECOMMENDATION]"
 
-                        5. users_feedback:
-                        - List 3 specific user feedback separated by "،"
-                        - Use VERY CASUAL, personal language
-                        - Base feedback on REAL user feedback and reviews from the internet
-                        - Use expressions like: " بر اساس سرچی که توی اینترنت کردم کاربرا میگن", "خیلیا گفتن", "اصلاً", "واقعاً"
-                        - Example: "کاربرا میگن که باتریش یه کم کمه ولی راحت توی گوش قرار میگیره. خیلیا گفتن که واقعاً راضین"
+                        CRITICAL CONTENT REQUIREMENTS:
+                        
+                        FOR NARRATION PART 1 (First Voice):
+                        ✅ MUST HAVE: intro_statement (product introduction)
+                        ✅ MUST HAVE: positive_features (3 specific features with casual enthusiasm)
+                        ✅ MUST HAVE: negative_aspects (2-3 weaknesses with casual honesty)
+                        ✅ MUST END WITH: transition phrase to next voice
+                        
+                        FOR NARRATION PART 2 (Second Voice):
+                        ✅ MUST START WITH: "خب بررسی خودمون رو با بازخورد کاربرا ادامه میدیم" or similar
+                        ✅ MUST HAVE: user_feedback (REAL feedback from internet research)
+                        ✅ MUST HAVE: competitors (3 real competitor products)
+                        ✅ MUST HAVE: comparison (honest comparison with competitors)
+                        ✅ MUST HAVE: recommendation (casual, personal final advice)
+                        TRANSITION PHRASES:
+                        - End of Part 1: "خیلی خب، توضیحاتمو توی ویس بعدی ادامه میدم" or "بقیه نکات رو توی ویس بعدی واست میگم"
+                        - Start of Part 2: "خب بررسی خودمون رو با بازخورد کاربرا ادامه میدیم" or "خب بیا ببینیم کاربرا چی میگن"
 
-                        4. competitors:
-                        - Name 3 real competitor products separated by "،" and "و"
-                        - Example: "Samsung Galaxy Buds و Apple AirPods Pro"
+                        LENGTH GUIDELINES:
+                        - Part 1: Approximately 400-500 characters (~30 seconds of speech)
+                        - Part 2: Approximately 400-500 characters (~30 seconds of speech)
+                        - Both parts should be roughly equal in length
 
-                        5. comparison:
-                        - One sentence comparing with each of the competitors
-                        - Consider both features
-                        - Examples: "نسبت به رقیب اول باتریش کمتره ولی باتریش کمتره"
-
-                        6. recommendation:
-                        - Final VERY CASUAL, personal recommendation in one sentence
-                        - Use expressions like: "من که", "به نظرم", "واقعاً", "اصلاً"
-                        - Examples: "من که می‌تونم بگم واقعاً ارزش خرید داره", "اگه بودجه‌ت محدوده، به نظرم گزینه خوبیه"
-
-                        LANGUAGE STYLE (VERY IMPORTANT):
-                        - Use VERY CASUAL, FRIENDLY Farsi like talking to your best friend
-                        - NEVER use formal verbs - always use informal ones:
-                        ✅ USE: "داره" (NOT "دارد")
-                        ✅ USE: "نداره" (NOT "ندارد")
-                        ✅ USE: "می‌کنه" (NOT "می‌کند")
-                        ✅ USE: "میشه" (NOT "می‌شود")
-                        ✅ USE: "میاد" (NOT "می‌آید")
-                        ✅ USE: "میره" (NOT "می‌رود")
-                        ✅ USE: "می‌تونه" (NOT "می‌تواند")
-                        - Use casual expressions throughout: "خب", "ببین", "واقعاً", "اصلاً", "خیلی", "یه کم"
-                        - Be enthusiastic and personal: "من که خیلی خوشم اومد", "به نظرم عالیه"
-                        - Add personality: "باورم نمیشه", "واقعاً عجیبه", "خیلی جالبه"
-                        - Write like you're excited to share with a friend
-                        - Use contractions and casual forms everywhere
-                        - Be specific and helpful but in a casual way
-                        - Keep each section concise (total ~300 words)
-                        - Make it natural for voice narration
-                        - Ground your analysis in real user experiences and feedback from the internet
+                        TEXT QUALITY RULES:
+                        1. Remove EXTRA SPACES between words (multiple spaces → single space)
+                        2. Fix punctuation marks properly
+                        3. NO DUPLICATE WORDS (e.g., "خوب خوب" → "خوب")
+                        4. Proper spacing around punctuation
+                        5. Natural sentence structure and flow
 
                         Return ONLY the JSON object, no additional text."""
 
@@ -349,7 +420,6 @@ def query_to_narration(product_info: dict, location: str, logger: Logger):
         
         # Clean up response if it contains markdown code blocks
         import json
-        import re
         
         response_text = response_text.strip()
         if response_text.startswith('```'):
@@ -359,19 +429,21 @@ def query_to_narration(product_info: dict, location: str, logger: Logger):
             response_text = content.strip()
         
         # Parse JSON
-        research_data = json.loads(response_text)
+        narration_data = json.loads(response_text)
         
-        # Format using template
-        narration_text = format_narration_with_template(research_data, logger)
+        # Extract the two narration parts
+        narration_part_1 = narration_data.get('narration_part_1', '').strip()
+        narration_part_2 = narration_data.get('narration_part_2', '').strip()
         
-        if narration_text:
-            # Split long narration if needed
-            narration_parts = split_long_narration(narration_text, logger)
-            
-            return narration_parts
-        else:
-            logger.error("Failed to format narration")
+        if not narration_part_1 or not narration_part_2:
+            logger.error("Failed to extract narration parts from response")
             return None
+        
+        logger.info(f"Generated narration part 1 length: {len(narration_part_1)} chars")
+        logger.info(f"Generated narration part 2 length: {len(narration_part_2)} chars")
+        
+        # Return both parts as a list
+        return [narration_part_1, narration_part_2]
             
     except Exception as e:
         logger.error(f"Error in deep product research: {e}")

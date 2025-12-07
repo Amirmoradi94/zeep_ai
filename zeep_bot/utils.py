@@ -3,18 +3,11 @@ import hmac
 import aiohttp
 import aiofiles
 import os
-import http.client
-import uuid
-import asyncio
 import re
 from fastapi import Request
-import openai
 import time
-from datetime import datetime
 import shutil
-from google.genai import types
-from urllib.parse import urlparse, parse_qs, quote, quote_plus, unquote
-import base64
+from urllib.parse import urlparse, parse_qs
 import json
 from dotenv import load_dotenv
 import requests
@@ -25,12 +18,12 @@ from db import (
     save_query, error_handler,
     clean_temp_variables,
     get_temp_variables,
-    get_active_model
+    get_active_model,
+    insert_temp_variables,
+    get_query_info,
+    update_query
 )
-from pathlib import Path
-import google.generativeai as genai
 from typing import Tuple, Optional
-from logging import Logger
 
 
 load_dotenv()
@@ -178,7 +171,7 @@ async def process_instagram_post(attachment_url, reel_caption, user_id, client, 
         query_ids = []
         logger.info("now saving query")
 
-        if len(generated_response) == 1 and list(generated_response.values())[0]['product_brand'] != 'N/A':
+        if len(generated_response) == 1 and list(generated_response.values())[0]['product_brand'] != 'N/A' and list(generated_response.values())[0].get('product_model', 'N/A') != 'N/A':
             query_id = await save_query(
                 user_id=user_id,
                 product_name=list(generated_response.keys())[0],
@@ -189,9 +182,31 @@ async def process_instagram_post(attachment_url, reel_caption, user_id, client, 
             )
             #if await is_saving_training_data():
             #    await save_frames_with_query_id(user_id, [query_id], logger)
-
-        elif len(generated_response) == 1 and list(generated_response.values())[0]['product_brand'] == 'N/A':
-            logger.info("now asking user for product brand")
+        elif len(generated_response) == 1 and (list(generated_response.values())[0]['product_brand'] == 'N/A' or list(generated_response.values())[0].get('product_model', 'N/A') == 'N/A'):
+            logger.info("now asking user for product brand or model (one or both missing)")
+            
+            # Save incomplete product info to temp variables
+            product_details = list(generated_response.values())[0]
+            product_name = list(generated_response.keys())[0]
+            
+            # Save query first to get query_id
+            query_id = await save_query(
+                user_id=user_id,
+                product_name=product_name,
+                product_brand=product_details.get('product_brand', 'N/A'),
+                product_title=product_details.get('product_title', product_name),
+                feedback=None,
+                logger=logger
+            )
+            
+            if query_id:
+                # Store query_id in temp variables for later retrieval
+                await insert_temp_variables(
+                    user_id,
+                    logger,
+                    query_id=query_id
+                )
+            
             return 'ask_user_for_product_brand'
         
         elif len(generated_response) > 1 :
@@ -215,8 +230,9 @@ async def process_instagram_post(attachment_url, reel_caption, user_id, client, 
             if len(query_ids) > 1 and all(qid is not None for qid in query_ids):
                 list_product_names = list(generated_response.keys())
                 list_product_brands = [details['product_brand'] for details in generated_response.values()]
+                list_product_models = [details.get('product_model', 'N/A') for details in generated_response.values()]
                 list_product_titles = [details['product_title'] for details in generated_response.values()]
-                return (list_product_names, query_ids, list_product_brands, list_product_titles)
+                return (list_product_names, query_ids, list_product_brands, list_product_models, list_product_titles)
         
         #------------------------------------* DEEP SEARCH *------------------------------------
         generated_narration = None
@@ -234,15 +250,52 @@ async def process_instagram_post(attachment_url, reel_caption, user_id, client, 
             research_complete_message = "تحقیقم رو انجام دادم و الان برات پیام صوتی می‌فرستم 🎤"
             await send_message_to_user(research_complete_message, user_id, logger)
 
-            for narration_text in generated_narration:
+            # Select a single voice for all parts to maintain consistency
+            import random
+            from narration_to_voice import AVAILABLE_SPEAKERS
+            selected_voice = random.choice(AVAILABLE_SPEAKERS)
+            logger.info(f"Selected voice for all parts: {selected_voice}")
+
+            # Process and send each voice part immediately as it's generated
+            for i, narration_text in enumerate(generated_narration, 1):
+                logger.info(f"Generating voice part {i}/{len(generated_narration)}")
+                
+                # Start timing
+                start_time = time.time()
+                
                 voice_success = await narration_to_voice(
                     narration_text=narration_text, 
                     gemini_client=actual_client,
                     logger=logger,
-                    user_id=user_id
+                    user_id=user_id,
+                    voice_name=selected_voice  # Use same voice for all parts
                 )
+                
+                # Calculate elapsed time
+                elapsed_time = time.time() - start_time
+                logger.info(f"Voice part {i}/{len(generated_narration)} generated in {elapsed_time:.2f} seconds")
+                
                 if not voice_success:
                     return 'no_voice_generated'
+                
+                # Send voice immediately after generation
+                logger.info(f"Sending voice part {i}/{len(generated_narration)} to user")
+                await send_message_to_user(voice_success, user_id, logger)
+                
+                # Clean up voice files immediately after successful send
+                import os
+                import glob
+                voices_dir = f"./voices/{user_id}/"
+                if os.path.exists(voices_dir):
+                    try:
+                        # Delete all voice files in the directory, but keep the directory
+                        voice_files = glob.glob(os.path.join(voices_dir, "*"))
+                        for voice_file in voice_files:
+                            if os.path.isfile(voice_file):
+                                os.remove(voice_file)
+                        logger.info(f"Cleaned up {len(voice_files)} voice file(s) after sending part {i}: {voices_dir}")
+                    except Exception as e:
+                        logger.warning(f"Failed to clean up voice files: {e}")
 
             return 'voice_generated'
         
@@ -268,22 +321,26 @@ async def send_select_product_postback_message(user_id, product_names, query_ids
     #print(f"product brands: {product_brands}")
 
     # Ensure all lists have the same length
-    min_length = min(len(product_names), len(query_ids), len(product_brands))
+    min_length = min(len(product_names), len(query_ids), len(product_brands), len(product_models))
     product_names = product_names[:min_length]
     query_ids = query_ids[:min_length]
     product_brands = product_brands[:min_length]
+    product_models = product_models[:min_length]
+    
     # Chunk the lists into groups of 3 (max buttons per template)
     chunked_product_names = [product_names[i:i+3] for i in range(0, len(product_names), 3)]
     chunked_query_ids = [query_ids[i:i+3] for i in range(0, len(query_ids), 3)]
     chunked_product_brands = [product_brands[i:i+3] for i in range(0, len(product_brands), 3)]
+    chunked_product_models = [product_models[i:i+3] for i in range(0, len(product_models), 3)]
+    
     # Create elements for each chunk
     elements = []
-    for i, (names_chunk, ids_chunk, brands_chunk) in enumerate(zip(chunked_product_names, chunked_query_ids, chunked_product_brands)):
+    for i, (names_chunk, ids_chunk, brands_chunk, models_chunk) in enumerate(zip(chunked_product_names, chunked_query_ids, chunked_product_brands, chunked_product_models)):
         buttons = []
-        for name, query_id, brand in zip(names_chunk, ids_chunk, brands_chunk):
+        for name, query_id, brand, model in zip(names_chunk, ids_chunk, brands_chunk, models_chunk):
             # Clean and format the title/payload
             title = name.strip().capitalize()
-            payload = f"SELECT_PRODUCT_{query_id}_{name.replace(' ', '_')}_{brand.replace(' ', '_')}"
+            payload = f"SELECT_PRODUCT_{query_id}_{name.replace(' ', '_')}_{brand.replace(' ', '_')}_{model.replace(' ', '_')}"
             
             buttons.append({
                 "type": "postback",
@@ -769,12 +826,12 @@ async def verify_webhook_call(request: Request, logger):
         
         # Step 5: Compare signatures securely
         if not hmac.compare_digest(expected_signature, signature):
-            await error_handler(
-                "Invalid Facebook signature",
-                "error",
-                "high",
-                logger
-            )
+            #await error_handler(
+            #    "Invalid Facebook signature",
+            #    "error",
+           #     "high",
+           #     logger
+        #)
             return False
         
         # Step 6: Parse the body after verification
@@ -837,11 +894,11 @@ async def process_message_with_gemini(
         logger: Logger instance
     
     Returns:
-        Tuple[str, Optional[str], str]: (message_type, response, product_name)
-        - message_type can be: 'general' | 'product_brand'
+        Tuple[str, Optional[str], str]: (message_type, response, product_info)
+        - message_type can be: 'general' | 'product_details'
         - response: 
             * general: Answer for general message
-            * product_brand: Product brand for narration generation step
+            * product_details: JSON with product brand and/or model
     """
     try:
         # Use the new google.genai API
@@ -854,26 +911,60 @@ async def process_message_with_gemini(
         Respond ONLY in the following JSON format (do not include any extra text, markdown, or explanation):
 
         {{
-            "message_type": "general" | "product_brand",
-            "response": "answer user's general message" | "product brand for narration generation step",
+            "message_type": "general" | "product_details",
+            "response": "answer user's general message" | {{"product_brand": "brand name or N/A", "product_model": "model name/number or N/A"}}
         }}
-        For product_brand:
-        - Determine if user message contains product brand.
-        - If it contains, return "product_brand" for message_type and the product brand as the response.
-        - If it doesn't contain, return "general" for message_type and ask the user to share the product brand.
+        
+        For product_details:
+        - Determine if user message contains product brand and/or model information.
+        - Extract BOTH brand AND model if available (e.g., "Samsung M27", "iPhone 15 Pro", "Galaxy S24 Ultra")
+        - If user provides brand only (e.g., "Samsung"), extract brand and set model to "N/A"
+        - If user provides model only (e.g., "M27 27 inch"), set brand to "N/A" and extract model
+        - If user provides both, extract both
+        - If neither is provided, return "general" message_type and ask the user to share product brand and/or model
+        - Model can include: model numbers, sizes, capacities (e.g., "M27", "27 inch FHD", "S24 Ultra", "256GB", "16 Pro Max")
 
         Examples:
-        User: "I saw a Nike Air Max 270 in the video, can you find that?"
+        User: "Samsung M27 27 inch FHD monitor"
         Output:
         {{
-            "message_type": "product_brand",
-            "response": "Nike Air Max 270",
+            "message_type": "product_details",
+            "response": {{"product_brand": "Samsung", "product_model": "M27 27 inch FHD"}}
         }}
-        User: "I saw a Samsung Galaxy Buds 2 Pro in the video, can you find that?"
+        
+        User: "iPhone 15 Pro Max"
         Output:
         {{
-            "message_type": "product_brand",
-            "response": "Samsung Galaxy Buds 2 Pro",
+            "message_type": "product_details",
+            "response": {{"product_brand": "Apple", "product_model": "iPhone 15 Pro Max"}}
+        }}
+        
+        User: "Samsung Galaxy S24"
+        Output:
+        {{
+            "message_type": "product_details",
+            "response": {{"product_brand": "Samsung", "product_model": "Galaxy S24"}}
+        }}
+        
+        User: "Samsung"
+        Output:
+        {{
+            "message_type": "product_details",
+            "response": {{"product_brand": "Samsung", "product_model": "N/A"}}
+        }}
+        
+        User: "M27 monitor"
+        Output:
+        {{
+            "message_type": "product_details",
+            "response": {{"product_brand": "N/A", "product_model": "M27"}}
+        }}
+        
+        User: "Hello, how are you?"
+        Output:
+        {{
+            "message_type": "general",
+            "response": "سلام! من خوبم، ممنون. چطور می‌تونم کمکت کنم؟"
         }}
         """
         
@@ -964,44 +1055,138 @@ async def main_brain_message_processor(user_id, user_message, ai_client, locatio
                 await send_message_to_user(general_message_text, user_id, logger)
             return True
         
-        # Product brand
-        elif message_type == "product_brand":
+        # Product details (brand and/or model)
+        elif message_type == "product_details":
             temp_variables = await get_temp_variables(user_id, ['query_id'], logger)
             if temp_variables:
                 query_id = temp_variables.get('query_id')
-                updated = await update_query(query_id, user_id, response, logger)
+                
+                # Get stored product info from queries table
                 query_info = await get_query_info(user_id, query_id, logger)
-                if query_info:
-                    product_name = query_info.get('product_name')
-                    product_brand = query_info.get('product_brand')
-                    product_info = {
-                        'product_title': product_name,
-                        'product_brand': product_brand
-                    }
-                    generated_narration = query_to_narration(product_info, location, logger)
-                    if not generated_narration:
-                        return False
-
-                    # Send message to user that research is done and voice is being generated
-                    research_complete_message = "تحقیقم رو انجام دادم و الان برات پیام صوتی می‌فرستم 🎤"
-                    await send_message_to_user(research_complete_message, user_id, logger)
-
-                    for narration_text in generated_narration:
-                        voice_success = await narration_to_voice(
-                            narration_text=narration_text, 
-                            gemini_client=ai_client['client'],
-                            logger=logger,
-                            user_id=user_id
-                        )
-                        if not voice_success:
-                            return False
-                        
-                        await send_message_to_user(voice_success, user_id, logger)
-                        return True
+                if not query_info:
+                    logger.error("Could not retrieve query info")
+                    return False
+                
+                stored_product_name = query_info.get('product_name')
+                stored_product_brand = query_info.get('product_brand', 'N/A')
+                stored_product_title = query_info.get('product_title')
+                
+                # Parse the response to get brand and model from user input
+                import json
+                if isinstance(response, str):
+                    try:
+                        product_details = json.loads(response)
+                    except:
+                        product_details = {'product_brand': response, 'product_model': 'N/A'}
+                elif isinstance(response, dict):
+                    product_details = response
                 else:
+                    logger.error(f"Unexpected response type: {type(response)}")
+                    return False
+                
+                user_provided_brand = product_details.get('product_brand', 'N/A')
+                user_provided_model = product_details.get('product_model', 'N/A')
+                
+                # Merge with stored data: use user-provided if available, otherwise keep stored
+                final_brand = user_provided_brand if user_provided_brand != 'N/A' else stored_product_brand
+                final_model = user_provided_model if user_provided_model != 'N/A' else 'N/A'
+                
+                logger.info(f"User provided - Brand: {user_provided_brand}, Model: {user_provided_model}")
+                logger.info(f"Stored - Brand: {stored_product_brand}")
+                logger.info(f"Final - Brand: {final_brand}, Model: {final_model}")
+                
+                # Check if we still have missing information
+                if final_brand == 'N/A' or final_model == 'N/A':
+                    missing = []
+                    if final_brand == 'N/A':
+                        missing.append("برند (Brand)")
+                    if final_model == 'N/A':
+                        missing.append("مدل (Model)")
+                    
+                    missing_info = " و ".join(missing)
+                    ask_again_message = f"لطفاً {missing_info} محصول رو بهم بگو تا بتونم بررسی دقیق‌تری انجام بدم."
+                    await send_message_to_user(ask_again_message, user_id, logger)
+                    
+                    # Update query with what we have so far
+                    if final_brand != 'N/A' and final_brand != stored_product_brand:
+                        await update_query(query_id, user_id, final_brand, logger)
+                    
+                    return True
+                
+                # We have both brand and model, proceed with narration generation
+                logger.info(f"Got complete product info - Brand: {final_brand}, Model: {final_model}")
+                
+                # Update query with final brand
+                if final_brand != stored_product_brand:
+                    await update_query(query_id, user_id, final_brand, logger)
+                
+                # Construct product_title with brand and model
+                product_title = f"{final_brand} {final_model}".strip()
+                
+                product_info = {
+                    'product_title': product_title,
+                    'product_brand': final_brand
+                }
+                
+                generated_narration = query_to_narration(product_info, location, logger)
+                if not generated_narration:
                     return False
 
+                # Send message to user that research is done and voice is being generated
+                research_complete_message = "تحقیقم رو انجام دادم و الان برات پیام صوتی می‌فرستم 🎤"
+                await send_message_to_user(research_complete_message, user_id, logger)
+
+                # Select a single voice for all parts to maintain consistency
+                import random
+                from narration_to_voice import AVAILABLE_SPEAKERS
+                selected_voice = random.choice(AVAILABLE_SPEAKERS)
+                logger.info(f"Selected voice for all parts: {selected_voice}")
+
+                # Process and send each voice part immediately as it's generated
+                for i, narration_text in enumerate(generated_narration, 1):
+                    logger.info(f"Generating voice part {i}/{len(generated_narration)}")
+                    
+                    # Start timing
+                    start_time = time.time()
+                    
+                    voice_success = await narration_to_voice(
+                        narration_text=narration_text, 
+                        gemini_client=ai_client['client'],
+                        logger=logger,
+                        user_id=user_id,
+                        voice_name=selected_voice  # Use same voice for all parts
+                    )
+                    
+                    # Calculate elapsed time
+                    elapsed_time = time.time() - start_time
+                    logger.info(f"Voice part {i}/{len(generated_narration)} generated in {elapsed_time:.2f} seconds")
+                    
+                    if not voice_success:
+                        return False
+                    
+                    # Send voice immediately after generation
+                    logger.info(f"Sending voice part {i}/{len(generated_narration)} to user")
+                    await send_message_to_user(voice_success, user_id, logger)
+                    
+                    # Clean up voice files immediately after successful send
+                    import os
+                    import glob
+                    voices_dir = f"./voices/{user_id}/"
+                    if os.path.exists(voices_dir):
+                        try:
+                            # Delete all voice files in the directory, but keep the directory
+                            voice_files = glob.glob(os.path.join(voices_dir, "*"))
+                            for voice_file in voice_files:
+                                if os.path.isfile(voice_file):
+                                    os.remove(voice_file)
+                            logger.info(f"Cleaned up {len(voice_files)} voice file(s) after sending part {i}: {voices_dir}")
+                        except Exception as e:
+                            logger.warning(f"Failed to clean up voice files: {e}")
+                
+                # All voices sent successfully
+                return True
             else:
+                logger.warning("No temp variables found for product_details message type")
                 return False
         
     except Exception as e:

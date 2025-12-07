@@ -1,6 +1,4 @@
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -167,7 +165,7 @@ async def handle_webhook_post(request: Request):
     
     # Simple in-memory cache for message deduplication
     if message_id and message_id in processing_requests:
-        logger.info(f"Message {message_id} from user {user_id} ignored - already processed")
+        #logger.info(f"Message {message_id} from user {user_id} ignored - already processed")
         return {"status": "message_already_processed"}
     
     # Add message ID to processing set
@@ -278,8 +276,8 @@ async def handle_webhook_post(request: Request):
                 await send_message_to_user(get_text(processing_result), user_id, logger)
                 return {"status": processing_result}
         elif type(processing_result) == tuple:
-            list_product_names, query_ids, list_product_brands, list_product_titles = processing_result
-            await send_select_product_postback_message(user_id, list_product_names, query_ids, list_product_brands, list_product_titles, logger)
+            list_product_names, query_ids, list_product_brands, list_product_models, list_product_titles = processing_result
+            await send_select_product_postback_message(user_id, list_product_names, query_ids, list_product_brands, list_product_models, logger)
             return {"status": "select_product_postback_message_sent"}
         
         # User's reel or image contains only one product
@@ -319,10 +317,10 @@ async def handle_webhook_post(request: Request):
 
         # User selected a product in postback
         elif 'SELECT_PRODUCT_' in payload:
-            # Extract query_id, product name and brand from postback payload
+            # Extract query_id, product name, brand, and model from postback payload
             parts = payload.replace('SELECT_PRODUCT_', '').split('_')
             
-            if len(parts) < 3:
+            if len(parts) < 4:
                 logger.error(f"Invalid postback payload format: {payload}")
                 await send_message_to_user(internal_error_text, user_id, logger)
                 return {"status": "error_processing_instagram_post"}
@@ -330,8 +328,10 @@ async def handle_webhook_post(request: Request):
             query_id = int(parts[0])
             product_name = parts[1].replace('_', ' ')
             product_brand = parts[2].replace('_', ' ')
+            product_model = parts[3].replace('_', ' ')
 
-            if product_brand == 'N/A':
+            # Ask user for more details if brand OR model is missing
+            if product_brand == 'N/A' or product_model == 'N/A':
                 await send_message_to_user(ask_user_for_product_brand_text, user_id, logger)
                 return {"status": "ask_user_for_product_brand"}
 
@@ -351,19 +351,56 @@ async def handle_webhook_post(request: Request):
             research_complete_message = "تحقیقم رو انجام دادم و الان بهت ویس میدم 🎤"
             await send_message_to_user(research_complete_message, user_id, logger)
 
-            for narration_text in generated_narration:
+            # Select a single voice for all parts to maintain consistency
+            import random
+            from narration_to_voice import AVAILABLE_SPEAKERS
+            selected_voice = random.choice(AVAILABLE_SPEAKERS)
+            logger.info(f"Selected voice for all parts: {selected_voice}")
+
+            # Process and send each voice part immediately as it's generated
+            for i, narration_text in enumerate(generated_narration, 1):
+                logger.info(f"Generating voice part {i}/{len(generated_narration)}")
+                
+                # Start timing
+                start_time = time.time()
+                
                 voice_success = await narration_to_voice(
                     narration_text=narration_text, 
                     gemini_client=ai_client['client'],
                     logger=logger,
-                    user_id=user_id
+                    user_id=user_id,
+                    voice_name=selected_voice  # Use same voice for all parts
                 )
+                
+                # Calculate elapsed time
+                elapsed_time = time.time() - start_time
+                logger.info(f"Voice part {i}/{len(generated_narration)} generated in {elapsed_time:.2f} seconds")
+                
                 if not voice_success:
                     await send_message_to_user(no_voice_generated_text, user_id, logger)
-                    return {"status": "no_voice_generated"}
+                    return {"status": f"no_voice_generated_part_{i}"}
                 
+                # Send voice immediately after generation
+                logger.info(f"Sending voice part {i}/{len(generated_narration)} to user")
                 await send_message_to_user(voice_success, user_id, logger)
-                return {"status": "voice_sent_successfully"}
+                
+                # Clean up voice files immediately after successful send
+                import shutil
+                import glob
+                voices_dir = f"./voices/{user_id}/"
+                if os.path.exists(voices_dir):
+                    try:
+                        # Delete all voice files in the directory, but keep the directory
+                        voice_files = glob.glob(os.path.join(voices_dir, "*"))
+                        for voice_file in voice_files:
+                            if os.path.isfile(voice_file):
+                                os.remove(voice_file)
+                        logger.info(f"Cleaned up {len(voice_files)} voice file(s) after sending part {i}: {voices_dir}")
+                    except Exception as e:
+                        logger.warning(f"Failed to clean up voice files: {e}")
+            
+            # All voices sent successfully
+            return {"status": "all_voices_sent_successfully"}
 
         # Handle stored post processing
         temp_variables = await get_temp_variables(user_id, ['post_url', 'post_type', 'reel_caption'], logger)
@@ -385,8 +422,8 @@ async def handle_webhook_post(request: Request):
                         await send_message_to_user(get_text(processing_result), user_id, logger)
                         return {"status": processing_result}
                 elif type(processing_result) == tuple:
-                    list_product_names, query_ids, list_product_brands, list_product_titles = processing_result
-                    await send_select_product_postback_message(user_id, list_product_names, query_ids, list_product_brands, list_product_titles, logger)
+                    list_product_names, query_ids, list_product_brands, list_product_models, list_product_titles = processing_result
+                    await send_select_product_postback_message(user_id, list_product_names, query_ids, list_product_brands, list_product_models, logger)
                     return {"status": "select_product_postback_message_sent"}
                 
                 # User's reel or image contains only one product

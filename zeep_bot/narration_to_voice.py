@@ -181,7 +181,7 @@ async def narration_to_voice(
         output_filename = output_filename.replace('.wav', '').replace('.mp3', '')
         
         # Prepare content with speaking style instruction
-        styled_text = f"[Speak quickly and energetically] {narration_text}"
+        styled_text = f"[Speak middle pace and energetically] {narration_text}"
         model = "gemini-2.5-flash-preview-tts"
         contents = [
             types.Content(

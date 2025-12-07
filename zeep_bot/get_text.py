@@ -19,6 +19,7 @@ def get_text(key):
         "post_deleted": "Oh no! 😕\n\nThe message you sent seems to be gone. ",
         "we_are_working_on_it": "We're searching deep and wide for the best deals! 🕒",
         "restricted_product_message_sent": "We're sorry, this product is restricted. Please try a different reel or post! 📸",
+        "ask_user_for_product_brand": "ببخشید من نتونستم برند محصول رو پیدا کنم. لطفا برند محصول رو بهم بگو.",
     }
     
     if key == "analyzing_post":

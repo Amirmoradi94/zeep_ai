@@ -18,7 +18,6 @@ GEMINI_OUTPUT_TOKENS = 50  # output tokens
 
 
 async def frames_to_search_query_gemini(user_id, gemini_client, reel_caption, logger: Logger):
-    logger.info("now in frames_to_search_query_gemini")
     frames_path = f"{FRAMES_PATH}/{user_id}/"
     image_files = []
     all_images = os.listdir(frames_path)
@@ -44,13 +43,13 @@ async def frames_to_search_query_gemini(user_id, gemini_client, reel_caption, lo
 
     system_instruction = f"""
         You are a product recognition expert for online shopping. You are given one or a set of frames from an Instagram reel that features one or more products for recognition. 
-        Your PRIMARY task is to identify the **BRAND** and **PRODUCT TITLE** (name) of the main product(s) being advertised, along with detailed information for deep research and analysis.
+        Your PRIMARY task is to identify the **BRAND**, **MODEL**, and **PRODUCT TITLE** (name) of the main product(s) being advertised, along with detailed information for deep research and analysis.
 
         #### Instructions:
 
         1.  **Identify the Product Type:**
             - First, determine the type of product in the images by analyzing visual characteristics such as shape, color, size, and any visible text or logos.
-            - Look carefully for brand logos, brand names, or any text that indicates the manufacturer.
+            - Look carefully for brand logos, brand names, model numbers, or any text that indicates the manufacturer.
 
         2.  **Extract Product Brand (CRITICAL):**
             - **PRIORITY TASK:** Identify the brand name from:
@@ -66,49 +65,67 @@ async def frames_to_search_query_gemini(user_id, gemini_client, reel_caption, lo
             - If brand is clearly identifiable, provide the exact brand name (e.g., "Nike", "Samsung", "Apple", "Adidas")
             - If brand cannot be identified with confidence, set to 'N/A'
 
-        3.  **Extract Product Title/Name (CRITICAL):**
-            - Create a specific, searchable product title that is **at most 3-4 words**
-            - Include brand and model in the title if known (e.g., "Nike Air Max 270", "Samsung Galaxy Buds 2 Pro")
-            - If brand unknown, use descriptive title (e.g., "Wireless Bluetooth Earbuds", "Black Leather Jacket")
+        3.  **Extract Product Model (CRITICAL):**
+            - **PRIORITY TASK:** Identify the specific model number or model name from:
+                - Visible model numbers on the product (e.g., "M27", "S24", "Air Max 270")
+                - Text on product labels or packaging
+                - Model specifications in the reel caption
+                - Size or capacity information (e.g., "27 inch", "256GB", "Pro Max")
+            - Examples of good model detection:
+                - Monitor: "M27" or "27 inch" or "G5 27"
+                - Phone: "Galaxy S24 Ultra" or "iPhone 15 Pro Max"
+                - Earbuds: "Buds Pro 2" or "AirPods Pro"
+            - If model is clearly identifiable, provide the exact model (e.g., "Air Max 270", "Galaxy S24", "M27")
+            - If model cannot be identified with confidence, set to 'N/A'
+
+        4.  **Extract Product Title/Name (CRITICAL):**
+            - Create a specific, searchable product title that is **at most 4-5 words**
+            - Include brand, model, and key feature in the title if known (e.g., "Samsung Galaxy S24 Ultra 256GB", "Nike Air Max 270", "Samsung M27 Monitor 27 inch")
+            - If brand or model unknown, use descriptive title (e.g., "Wireless Bluetooth Earbuds", "Black Leather Jacket")
             - Make it specific enough for online search
 
-        6.  **Check if Product is Prohibited:**
+        5.  **Check if Product is Prohibited:**
             - Set `not_allowed` to `True` if the product matches any category in:
             {json.dumps(prohibited_products, indent=4)}
             - Set to `False` if the product is allowed
 
-        7.  **Use the Reel Caption:**
-            - **IMPORTANT:** The reel caption often contains the brand name and product details
-            - Extract brand names and model information from the caption
+        6.  **Use the Reel Caption:**
+            - **IMPORTANT:** The reel caption often contains the brand name, model information, and product details
+            - Extract brand names, model numbers, and specifications from the caption
             - Translate key terms if necessary
 
-        8.  **Handle Multiple Products:**
+        7.  **Handle Multiple Products:**
             - If the same product appears in multiple frames, consolidate into **one entry**
             - If multiple different products are shown, create **separate entries** for each
             - Focus only on main products, ignore accessories or background items
 
         #### Response Format:
-        Return a JSON object where each key is a product title (including brand if known, max 3-4 words) and the value contains:
+        Return a JSON object where each key is a product title (including brand and model if known, max 4-5 words) and the value contains:
         - product_brand: The brand name (CRITICAL - extract from images/caption) or 'N/A'
+        - product_model: The model name/number (CRITICAL - extract from images/caption) or 'N/A'
         - product_title: The product title (same as the key)
         - not_allowed: Boolean indicating if the product is prohibited
 
-        **IMPORTANT:** Focus on accurately identifying the BRAND and creating a clear PRODUCT TITLE.
+        **IMPORTANT:** Focus on accurately identifying the BRAND, MODEL, and creating a clear PRODUCT TITLE.
 
         Exactly follow this format:
         {{
-            "Samsung Galaxy Earbuds": {{
+            "Samsung Galaxy S24 Ultra": {{
                 "product_brand": "Samsung",
-                "product_title": "Samsung Galaxy Buds 2 Pro",
+                "product_model": "Galaxy S24 Ultra",
+                "product_title": "Samsung Galaxy S24 Ultra",
                 "not_allowed": false
             }},
-            "Nike Air Max Shoes": {{
-                "product_brand": "Nike",
-                "product_title": "Nike Air Max 270 Shoes",
+            "Samsung M27 Monitor 27 inch": {{
+                "product_brand": "Samsung",
+                "product_model": "M27 27 inch",
+                "product_title": "Samsung M27 Monitor 27 inch",
                 "not_allowed": false
             }},
+
             "Wireless Bluetooth Earbuds": {{
                 "product_brand": "N/A",
+                "product_model": "N/A",
                 "product_title": "Wireless Bluetooth Earbuds",
                 "not_allowed": false
             }}
@@ -201,8 +218,8 @@ async def frames_to_search_query_gemini(user_id, gemini_client, reel_caption, lo
                 if not isinstance(details, dict):
                     raise ValueError(f"Product details for {product_title} is not a dictionary")
                 
-                # Required fields in order: product_brand, product_title, not_allowed
-                required_fields = ["product_brand", "product_title", "not_allowed"]
+                # Required fields in order: product_brand, product_model, product_title, not_allowed
+                required_fields = ["product_brand", "product_model", "product_title", "not_allowed"]
                 
                 for field in required_fields:
                     if field not in details:
@@ -216,8 +233,8 @@ async def frames_to_search_query_gemini(user_id, gemini_client, reel_caption, lo
                         if not isinstance(details[field], str):
                             raise ValueError(f"Field '{field}' for product {product_title} must be a string")
                 
-                # Log extracted brand and product name for debugging
-                logger.info(f"Extracted Product: {details['product_title']} | Brand: {details['product_brand']}")
+                # Log extracted brand, model, and product name for debugging
+                logger.info(f"Extracted Product: {details['product_title']} | Brand: {details['product_brand']} | Model: {details['product_model']}")
 
             return parsed_response
         except json.JSONDecodeError as e:
